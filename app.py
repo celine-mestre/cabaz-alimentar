@@ -19,7 +19,8 @@ from src import eurostat
 from src.calculos import (ESCALAS, decompor, despesa_do_agregado, intervalo_agregado,
                           resumo_decomposicao, resumo_iva, simular_iva,
                           unidades_equivalentes)
-from src.config import (AZUL, CLASSES, CODIGOS, COICOP_ALIMENTAR, DOURADO,
+from src.config import (AGREGADOS_ANO, AGREGADOS_CENSOS, AGREGADOS_FONTE,
+                        AZUL, CLASSES, CODIGOS, COICOP_ALIMENTAR, DOURADO,
                         PAISES, PAISES_POR_DEFEITO, POR_CODIGO, RODAPE,
                         UNIDADE, VERDE, VERMELHO, euro, mes_pt, percentagem)
 
@@ -44,26 +45,24 @@ st.markdown(f"""
   @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700&display=swap');
   html, body, [class*="css"] {{ font-family: 'Lexend', Arial, sans-serif; }}
 
-  .cabecalho {{
-    background: linear-gradient(120deg, {AZUL} 0%, #1a3f6f 28%, {VERDE} 62%, #0a5228 100%);
-    border-bottom: 3px solid {VERMELHO};
-    padding: 22px 26px; border-radius: 12px; color: #fff; margin-bottom: 18px;
+  .barra {{
+    display: flex; align-items: center; gap: 11px;
+    background: linear-gradient(120deg, {AZUL} 0%, #1a3f6f 30%, {VERDE} 70%, #0a5228 100%);
+    border-bottom: 2px solid {VERMELHO}; border-radius: 8px;
+    padding: 9px 15px; margin-bottom: 14px; color: #fff;
   }}
-  .cab-topo {{ display: flex; align-items: center; gap: 13px; margin-bottom: 14px; }}
-  .simbolo {{
-    width: 46px; height: 46px; border-radius: 50%; background: #fff; flex: 0 0 46px;
-    display: flex; align-items: center; justify-content: center;
-    border: 1px solid rgba(23,23,21,.16);
+  .barra .sim {{
+    width: 32px; height: 32px; border-radius: 50%; background: #fff;
+    padding: 1px; flex: 0 0 32px; display: block;
   }}
-  .simbolo img {{ width: 42px; height: 42px; display: block; border-radius: 50%; }}
-  .cabecalho h1 {{
-    font-size: 26px; font-weight: 600; margin: 0 0 6px; letter-spacing: -.5px;
-    padding-left: 14px; border-left: 4px solid {DOURADO}; line-height: 1.25;
+  .barra .bt {{ display: flex; flex-direction: column; line-height: 1.25; }}
+  .barra .bt strong {{ font-size: 11.5px; font-weight: 600; letter-spacing: .45px; }}
+  .barra .bt span {{ font-size: 10px; opacity: .85; }}
+  .barra .bd {{
+    margin-left: auto; font-size: 14px; font-weight: 600; letter-spacing: -.2px;
+    padding-left: 13px; border-left: 3px solid {DOURADO};
   }}
-  .cabecalho p {{ margin: 0 0 0 18px; font-size: 13.5px; opacity: .93; }}
-  .cabecalho .marca {{
-    font-size: 11.5px; font-weight: 600; letter-spacing: .5px; opacity: .95; line-height: 1.4;
-  }}
+  @media (max-width: 640px) {{ .barra .bd {{ display: none; }} }}
 
   .cartao {{
     background: #fff; border: 1px solid #e2e8f0; border-radius: 11px;
@@ -138,6 +137,13 @@ def carregar_dados(anos_historico: int = 6):
         dim_df, via5 = pd.DataFrame(), f"indisponível ({exc})"
         registo.append(("Dimensão média do agregado", via5, 0))
 
+    try:
+        agr_df, via6 = eurostat.numero_agregados(ano - anos_historico)
+        registo.append(("N.º de agregados familiares", via6, len(agr_df)))
+    except Exception as exc:                                   # noqa: BLE001
+        agr_df, via6 = pd.DataFrame(), f"indisponível ({exc})"
+        registo.append(("N.º de agregados familiares", via6, 0))
+
     # --- ponderadores: ano mais recente de cada classe ---
     pesos_df = pesos_df.sort_values("time")
     pesos = pesos_df.groupby("coicop")["valor"].last().to_dict()
@@ -179,12 +185,33 @@ def carregar_dados(anos_historico: int = 6):
         recente = desp_df.sort_values("time").iloc[-1]
         despesa_ano, despesa_valor = str(recente["time"]), float(recente["valor"])
 
+    # --- número de agregados: preferir o valor anual do Eurostat ---
+    agregados_valor, agregados_ano, agregados_fonte = None, None, None
+    if not agr_df.empty:
+        rec_a = agr_df.sort_values("time").iloc[-1]
+        candidato = int(round(float(rec_a["valor"]) * 1000))          # vem em milhares
+        # Verificação de plausibilidade: um valor fora deste intervalo indica que
+        # o conjunto devolvido não é o esperado (dimensão errada, unidade errada,
+        # série trocada). Nesse caso recorre-se ao valor censitário, que é seguro.
+        if 3_000_000 <= candidato <= 6_500_000:
+            agregados_valor = candidato
+            agregados_ano = str(rec_a["time"])
+            agregados_fonte = "Eurostat / Inquérito ao Emprego (EU-LFS)"
+        else:
+            registo.append(
+                ("N.º de agregados — verificação",
+                 f"valor implausível ({candidato:,}); usado o dos Censos".replace(",", " "), 0)
+            )
+
     dimensao_media, dimensao_ano = None, None
     if not dim_df.empty:
         rec = dim_df.sort_values("time").iloc[-1]
         dimensao_ano, dimensao_media = str(rec["time"]), float(rec["valor"])
 
     return {
+        "agregados_valor": agregados_valor,
+        "agregados_ano": agregados_ano,
+        "agregados_fonte": agregados_fonte,
         "base_indice": (base_indice if not indice_df.empty else None),
         "dimensao_media": dimensao_media,
         "dimensao_ano": dimensao_ano,
@@ -218,20 +245,24 @@ def ancora_oficial(dados: dict, agregados: int) -> dict | None:
 
     indice = dados["indice_pt"]
     if indice.empty:
-        return {"valor": mensal_base, "ano_base": ano_base,
+        return {"valor": mensal_base, "ano_base": ano_base, "plausivel": True,
                 "mes": None, "fator": 1.0, "base_mensal": mensal_base}
 
     do_ano = indice[indice["time"].str.startswith(str(ano_base))]
     if do_ano.empty:
-        return {"valor": mensal_base, "ano_base": ano_base,
+        return {"valor": mensal_base, "ano_base": ano_base, "plausivel": True,
                 "mes": None, "fator": 1.0, "base_mensal": mensal_base}
 
     media_base = float(do_ano["valor"].mean())
     ultimo = indice.sort_values("time").iloc[-1]
     fator = float(ultimo["valor"]) / media_base if media_base else 1.0
 
+    resultado_valor = mensal_base * fator
+    plausivel = 50.0 <= resultado_valor <= 3000.0
+
     return {
-        "valor": mensal_base * fator,
+        "plausivel": plausivel,
+        "valor": resultado_valor,
         "base_mensal": mensal_base,
         "ano_base": ano_base,
         "mes": str(ultimo["time"]),
@@ -242,11 +273,42 @@ def ancora_oficial(dados: dict, agregados: int) -> dict | None:
 # ==========================================================================
 # Componentes visuais
 # ==========================================================================
+def csv_com_fonte(df: pd.DataFrame, titulo: str, dados: dict, extra=None) -> bytes:
+    """
+    Exporta em CSV com cabeçalho de proveniência, para que o ficheiro seja
+    autoexplicativo fora da aplicação.
+    """
+    linhas = [
+        f"# {titulo}",
+        "# Produzido por: Unidade de Pesquisa e Estatisticas (UPE) - DSSD - Secretaria-Geral do Governo",
+        "# Fonte dos dados: Eurostat (indice harmonizado de precos no consumidor e contas nacionais)",
+        "# Conjuntos: prc_hicp_midx, prc_hicp_manr, prc_hicp_inw, nama_10_co3_p3, ilc_lvph01",
+        f"# Ultimo mes disponivel: {dados.get('mes_variacoes') or '-'}",
+        f"# Ponderadores de: {dados.get('ano_pesos') or '-'}",
+        f"# Ancora de despesa: Contas Nacionais {dados.get('despesa_ano') or '-'}",
+        f"# Extraido em: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+    ]
+    for chave, valor in (extra or []):
+        linhas.append(f"# {chave}: {valor}")
+    linhas += [
+        "# Documento de trabalho interno - nao constitui posicao oficial da Secretaria-Geral do Governo.",
+        "",
+    ]
+    corpo = df.to_csv(index=False, sep=";", decimal=",")
+    return ("\n".join(linhas) + corpo).encode("utf-8-sig")
+
+
 def cartao_classe(linha: pd.Series) -> str:
     var = linha["variacao"]
     cor_var = "#6b7280" if var is None else (VERMELHO if var > 0 else VERDE)
-    contributo = ("Contributo: <strong>" + euro(linha["contributo"]) + "</strong>"
-                  if linha["contributo"] is not None else "Aguarda dados")
+    quota = f"{linha['quota'] * 100:.1f}".replace(".", ",")
+    if linha["contributo"] is not None:
+        sinal = "encareceu" if linha["contributo"] > 0 else "baixou"
+        contributo = (f"{sinal} <strong>{euro(abs(linha['contributo']))}</strong> "
+                      "no último ano")
+    else:
+        contributo = "Aguarda dados"
+    var_txt = "—" if var is None else f"{percentagem(var)} num ano"
     return f"""
     <div class="cartao" style="--c:{linha['cor']}">
       <div class="topo">
@@ -256,8 +318,8 @@ def cartao_classe(linha: pd.Series) -> str:
       </div>
       <div class="vl">{euro(linha['valor'])}</div>
       <div class="ln">
-        <span style="color:#6b7280">{linha['quota'] * 100:.1f} % do cabaz</span>
-        <span style="color:{cor_var};font-weight:600">{percentagem(var)}</span>
+        <span style="color:#6b7280">{quota} % da despesa</span>
+        <span style="color:{cor_var};font-weight:600">{var_txt}</span>
       </div>
       <div class="ct">{contributo}</div>
     </div>"""
@@ -343,19 +405,16 @@ def grafico_reparticao(sim: pd.DataFrame) -> go.Figure:
 # Cabeçalho
 # ==========================================================================
 _logo_html = (
-    f'<div class="simbolo"><img src="data:image/png;base64,{LOGO}" alt="SGGov"></div>'
-    if LOGO else ""
+    f'<img class="sim" src="data:image/png;base64,{LOGO}" alt="SGGov">' if LOGO else ""
 )
 st.markdown(f"""
-<div class="cabecalho">
-  <div class="cab-topo">
-    {_logo_html}
-    <div class="marca">SECRETARIA-GERAL DO GOVERNO · SUPORTE À DECISÃO<br>
-    <span style="font-weight:400;opacity:.85">{UNIDADE}</span></div>
+<div class="barra">
+  {_logo_html}
+  <div class="bt">
+    <strong>SECRETARIA-GERAL DO GOVERNO</strong>
+    <span>Suporte à Decisão · {UNIDADE}</span>
   </div>
-  <h1>Despesa alimentar das famílias</h1>
-  <p>Composição por tipo de produto, séries oficiais, simulador de IVA e comparação
-  europeia. Dados obtidos em direto do Eurostat.</p>
+  <div class="bd">Despesa alimentar das famílias</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -389,128 +448,75 @@ ultimo_mes = dados["mes_variacoes"] or (
 with st.sidebar:
     st.markdown("### 🛒 Parâmetros")
 
-    agregados = st.number_input(
-        "Total de agregados familiares em Portugal", min_value=1,
-        value=4_100_000, step=100_000,
-        help=("Divisor: a despesa alimentar de todo o país é dividida por este número "
-              "para obter a despesa de um agregado. Valor de referência dos Censos 2021 "
-              "— confirme-o antes de usar os resultados."),
-    )
-    st.caption(
-        "É o **divisor**: a despesa alimentar nacional é dividida por este número "
-        "para obter a despesa de um agregado médio."
-    )
+    # --- número de agregados: sempre o valor oficial ---
+    if dados.get("agregados_valor"):
+        agregados = int(dados["agregados_valor"])
+        agr_fonte = f"{dados['agregados_fonte']}, {dados['agregados_ano']}"
+    else:
+        agregados = AGREGADOS_CENSOS
+        agr_fonte = AGREGADOS_FONTE
 
     ancora = ancora_oficial(dados, agregados)
+    if ancora is None:
+        st.error(
+            "Não foi possível calcular a despesa a partir das Contas Nacionais. "
+            "Consulte o registo de ligações no separador Metodologia."
+        )
+        st.stop()
+
+    media_agregado = float(ancora["valor"])
+    valor_medio_agregado = media_agregado
+    dim_media = dados.get("dimensao_media")
+
+    if not ancora.get("plausivel", True):
+        st.error(
+            "⚠️ **Valor fora do intervalo plausível.** Verifique o registo de ligações "
+            "no separador Metodologia. **Não use estes números.**"
+        )
+
+    st.caption("**Composição do agregado**")
+    ca, cb = st.columns(2)
+    adultos = ca.number_input("Adultos", min_value=1, max_value=8, value=2, step=1)
+    criancas = cb.number_input("Crianças (<14)", min_value=0, max_value=8, value=0, step=1)
+
+    dim_efetiva = dim_media if dim_media else 2.5
+    escala_chave = st.selectbox(
+        "Escala de equivalência", options=list(ESCALAS.keys()), index=1,
+        format_func=lambda k: ESCALAS[k]["nome"],
+        help="Como se ajusta a despesa ao número de pessoas. Ver separador Metodologia.",
+    )
+
+    valor_cabaz = despesa_do_agregado(
+        media_agregado, dim_efetiva, adultos, criancas, escala_chave)
+    faixa = intervalo_agregado(media_agregado, dim_efetiva, adultos, criancas)
+
+    composicao = (f"{adultos} adulto{'s' if adultos > 1 else ''}"
+                  + (f" + {criancas} criança{'s' if criancas > 1 else ''}"
+                     if criancas else ""))
+    pessoas = adultos + criancas
+    ue = unidades_equivalentes(adultos, criancas, escala_chave)
+    origem = (f"Contas Nacionais {ancora['ano_base']} · {composicao} · "
+              f"escala {ESCALAS[escala_chave]['nome']}")
+    vezes_ano = 12
 
     st.divider()
-    st.caption("**Valor de referência do cabaz**")
+    st.metric(f"Despesa mensal — {composicao}", euro(valor_cabaz))
+    st.caption(
+        f"{pessoas} pessoa{'s' if pessoas > 1 else ''} · intervalo entre escalas de "
+        f"{euro(faixa['minimo'])} a {euro(faixa['maximo'])}"
+    )
 
-    opcoes = ["Oficial — calculado a partir das Contas Nacionais"]
-    if ancora is None:
-        opcoes = ["Externo — valor que eu introduzo"]
-    else:
-        opcoes.append("Externo — valor que eu introduzo")
-
-    modo = st.radio("Origem do valor", opcoes, index=0, label_visibility="collapsed",
-                    help=("Oficial: a aplicação calcula a despesa a partir de dados do "
-                          "Eurostat. Externo: usa um valor de outra recolha, para comparação."))
-
-    if modo.startswith("Oficial") and ancora is not None:
-        media_agregado = float(ancora["valor"])
-        valor_medio_agregado = media_agregado
-        dim_media = dados.get("dimensao_media")
-
-        st.metric("Agregado médio nacional", euro(media_agregado))
-        if dim_media:
-            st.caption(
-                f"Corresponde a um agregado de **{('%.2f' % dim_media).replace('.', ',')} pessoas** "
-                f"(média nacional, EU-SILC {dados.get('dimensao_ano')}). "
-                f"Base: {euro(ancora['base_mensal'])}/mês em {ancora['ano_base']}, "
-                f"atualizada pelo índice de preços (×{('%.3f' % ancora['fator']).replace('.', ',')})."
-            )
-        else:
-            st.caption(
-                f"Base: {euro(ancora['base_mensal'])}/mês em {ancora['ano_base']}, "
-                f"atualizada pelo índice de preços (×{ancora['fator']:.3f}). "
-                "Dimensão média do agregado indisponível."
-            )
-
-        st.divider()
-        st.caption("**Composição do agregado a analisar**")
-        ca, cb = st.columns(2)
-        adultos = ca.number_input("Adultos", min_value=1, max_value=8, value=2, step=1)
-        criancas = cb.number_input("Crianças (<14)", min_value=0, max_value=8, value=0, step=1)
-
-        dim_efetiva = dim_media if dim_media else 2.5
-        escala_chave = st.selectbox(
-            "Escala de equivalência",
-            options=list(ESCALAS.keys()), index=1,
-            format_func=lambda k: ESCALAS[k]["nome"],
+    _agr_txt = f"{agregados:,}".replace(",", "\u00a0")
+    _mes_txt = mes_pt(ancora["mes"]) if ancora["mes"] else "—"
+    with st.expander("De onde vem este valor"):
+        st.markdown(
+            "Da **despesa alimentar de todas as famílias portuguesas** registada nas Contas "
+            f"Nacionais, dividida pelo número de agregados ({_agr_txt}), atualizada ao mês "
+            "corrente pelo índice oficial de preços e ajustada à composição indicada acima."
+            "\n\n"
+            f"**N.º de agregados:** {agr_fonte}  \n"
+            f"**Base de despesa:** Contas Nacionais {ancora['ano_base']}, a preços de {_mes_txt}"
         )
-        st.caption(ESCALAS[escala_chave]["nota"])
-        with st.expander("O que é uma escala de equivalência?"):
-            st.markdown("""
-Duas pessoas não gastam o dobro de uma. Há partilha: compra-se a granel, desperdiça-se
-menos, aproveitam-se sobras. Uma **escala de equivalência** traduz isso em números.
-
-Os três valores — por exemplo **1 / 0,7 / 0,5** — significam:
-
-| | Peso | Leitura |
-|---|---|---|
-| 1.º adulto | **1,0** | é a referência |
-| Cada adulto a mais | **0,7** | custa 70 % do primeiro |
-| Cada criança (<14) | **0,5** | custa 50 % do primeiro |
-
-Um casal com duas crianças vale `1 + 0,7 + 0,5 + 0,5 = 2,7` **unidades de consumo
-equivalente** — não 4. A despesa é calculada por unidade equivalente e multiplicada
-por este total.
-
-**Qual escolher?** A *OCDE modificada* (1 / 0,5 / 0,3) é a norma da UE, mas foi
-construída para o consumo total, onde partilhar casa gera grandes poupanças. Na
-alimentação a partilha é bem menor — não se divide uma refeição como se divide um
-teto. Por isso a aplicação usa por defeito a intermédia e mostra sempre o intervalo.
-            """)
-
-        valor_cabaz = despesa_do_agregado(
-            media_agregado, dim_efetiva, adultos, criancas, escala_chave)
-        faixa = intervalo_agregado(media_agregado, dim_efetiva, adultos, criancas)
-
-        composicao = (f"{adultos} adulto{'s' if adultos > 1 else ''}"
-                      + (f" + {criancas} criança{'s' if criancas > 1 else ''}"
-                         if criancas else ""))
-        pessoas = adultos + criancas
-        ue = unidades_equivalentes(adultos, criancas, escala_chave)
-
-        st.metric(f"Despesa mensal estimada — {composicao}", euro(valor_cabaz))
-        st.caption(
-            f"**{pessoas} pessoa{'s' if pessoas > 1 else ''}** · "
-            f"{('%.2f' % ue).replace('.', ',')} unidades de consumo equivalente. "
-            f"Consoante a escala usada, o valor situa-se entre "
-            f"**{euro(faixa['minimo'])}** e **{euro(faixa['maximo'])}**."
-        )
-
-        origem = (f"Contas Nacionais {ancora['ano_base']} · {composicao} · "
-                  f"escala {ESCALAS[escala_chave]['nome']}")
-        vezes_ano = 12
-    else:
-        valor_cabaz = st.number_input(
-            "Valor observado (€)", min_value=0.0, value=250.00, step=0.01, format="%.2f",
-            help="Valor de uma recolha externa, para comparação. Não é dado oficial.",
-        )
-        origem = st.text_input("Identificação da fonte", value="Recolha externa")
-        periodicidade = st.selectbox(
-            "Periodicidade", options=[("Semanal", 52), ("Mensal", 12), ("Anual", 1)],
-            format_func=lambda x: x[0], index=1,
-        )
-        vezes_ano = periodicidade[1]
-        st.caption(
-            "⚠️ Valor não oficial. Serve para comparação com a estimativa oficial; "
-            "não deve ser apresentado como número da Secretaria-Geral."
-        )
-        adultos, criancas, faixa, escala_chave = None, None, None, None
-        valor_medio_agregado = valor_cabaz
-        composicao = "valor externo"
 
     st.divider()
     st.caption("**Atualização dos dados**")
@@ -547,164 +553,38 @@ with aba1:
     colunas = st.columns(5)
     colunas[0].metric(f"Despesa mensal — {composicao}", euro(valor_cabaz), help=origem)
     if resumo["contributo_total"] is not None:
-        colunas[1].metric("Agravamento em 12 meses", euro(resumo["contributo_total"]),
+        colunas[1].metric("Agravamento nos últimos 12 meses", euro(resumo["contributo_total"]),
                           percentagem(resumo["variacao_implicita"]))
-        colunas[2].metric("Valor há um ano", euro(resumo["valor_ha_um_ano"]))
+        colunas[2].metric("Despesa há 12 meses", euro(resumo["valor_ha_um_ano"]))
         if resumo["maior"]:
             maior = resumo["maior"]
             colunas[3].metric(f"{maior['emoji']} Maior contributo",
                               euro(maior["contributo"]),
                               percentagem(maior["variacao"]))
-    colunas[4].metric(f"Equivalente anual (×{vezes_ano})", euro(valor_cabaz * vezes_ano))
+    colunas[4].metric("Equivalente anual", euro(valor_cabaz * vezes_ano))
 
-    if faixa is not None:
-        st.markdown(f"""
-        <div class="nota">
-          <div class="tt">A quantas pessoas corresponde este valor</div>
-          O ponto de partida é a despesa alimentar do <strong>agregado médio
-          português — {('%.2f' % (dados.get('dimensao_media') or 0)).replace('.', ',')} pessoas</strong> (EU-SILC
-          {dados.get('dimensao_ano','—')}). O valor acima está ajustado para
-          <strong>{composicao}</strong> através de uma escala de equivalência.
-          Consoante a escala aplicada, o resultado situa-se entre
-          <strong>{euro(faixa['minimo'])}</strong> e <strong>{euro(faixa['maximo'])}</strong> por mês.
-          <br><br>
-          <em>Ressalva:</em> as escalas de equivalência foram construídas para o consumo
-          <em>total</em>, em que a partilha da habitação gera fortes economias de escala.
-          Na alimentação essas economias são bem mais fracas — não se partilha uma refeição
-          como se partilha um teto. A escala OCDE modificada, norma da UE para o rendimento,
-          tende por isso a <strong>subestimar</strong> o custo alimentar de agregados maiores.
-        </div>
-        """, unsafe_allow_html=True)
+    st.info("""
+**Como ler os cartões.** O valor grande é quanto da despesa mensal vai para esse grupo.
+A percentagem à direita é a **variação homóloga** — de quanto os preços desse grupo subiram
+face ao **mesmo mês do ano anterior** (não face ao mês anterior). A linha de baixo mostra o
+**contributo**: quantos euros desse aumento se devem a esse grupo em concreto. A soma dos
+contributos de todos os grupos dá exatamente o agravamento total dos últimos 12 meses.
+    """)
 
-        with st.expander("Comparar composições de agregado"):
-            comps = [(1, 0, "1 adulto"), (2, 0, "Casal"), (1, 1, "Monoparental + 1"),
-                     (1, 2, "Monoparental + 2"), (2, 1, "Casal + 1 criança"),
-                     (2, 2, "Casal + 2 crianças"), (2, 3, "Casal + 3 crianças"),
-                     (3, 1, "3 adultos + 1 criança")]
-            dm = dados.get("dimensao_media") or 2.5
-            linhas_c = []
-            for a, c, rot in comps:
-                iv = intervalo_agregado(valor_medio_agregado, dm, a, c)
-                linhas_c.append({
-                    "Composição": rot,
-                    "Pessoas": a + c,
-                    "Estimativa central (€/mês)": round(
-                        despesa_do_agregado(valor_medio_agregado, dm, a, c, "ocde_original"), 2),
-                    "Mínimo (€/mês)": round(iv["minimo"], 2),
-                    "Máximo (€/mês)": round(iv["maximo"], 2),
-                })
-            df_c = pd.DataFrame(linhas_c)
-            st.dataframe(df_c, use_container_width=True, hide_index=True)
-
-            figc = go.Figure()
-            figc.add_trace(go.Bar(
-                x=df_c["Composição"], y=df_c["Mínimo (€/mês)"], name="Mínimo",
-                marker_color="#cbd5e1"))
-            figc.add_trace(go.Bar(
-                x=df_c["Composição"], y=df_c["Estimativa central (€/mês)"] - df_c["Mínimo (€/mês)"],
-                name="Até à estimativa central", marker_color=VERDE))
-            figc.add_trace(go.Bar(
-                x=df_c["Composição"], y=df_c["Máximo (€/mês)"] - df_c["Estimativa central (€/mês)"],
-                name="Até ao máximo", marker_color=DOURADO))
-            figc.update_layout(barmode="stack", height=340,
-                               margin=dict(t=30, b=60, l=10, r=10),
-                               yaxis_title="€ por mês",
-                               legend=dict(orientation="h", y=1.14, x=0),
-                               plot_bgcolor="#fff")
-            figc.update_yaxes(gridcolor="#eef1f4")
-            st.plotly_chart(figc, use_container_width=True)
-            st.caption(
-                "As barras mostram o intervalo entre a escala mais restritiva "
-                "(OCDE modificada) e a mais generosa (per capita)."
-            )
-
-    with st.expander("🧮 Como é calculado — fórmula, fontes e o que este número não é"):
-        st.markdown("""
-**1 · Ponto de partida: quanto gasta o país em alimentação**
-
-Das Contas Nacionais (`nama_10_co3_p3`) vem a despesa anual de todas as famílias
-portuguesas em produtos alimentares, em euros. Divide-se pelo total de agregados
-e por doze:
-
-```
-despesa mensal do agregado médio = despesa nacional anual ÷ n.º agregados ÷ 12
-```
-
-**2 · Atualização para o mês corrente**
-
-As Contas Nacionais têm cerca de dois anos de desfasamento. O valor é trazido
-para o presente com o índice oficial de preços alimentares (`prc_hicp_midx`):
-
-```
-valor atual = valor do ano-base × (índice do mês ÷ índice médio do ano-base)
-```
-
-**3 · Ajustamento à composição do agregado**
-
-Aplica-se a escala de equivalência escolhida (ver barra lateral).
-
-**4 · Repartição por tipo de produto**
-
-Os **ponderadores oficiais** do índice de preços (`prc_hicp_inw`) dizem que
-fração da despesa alimentar vai para cada um dos nove grupos. É essa estrutura
-que reparte o valor total pelos cartões acima. A variação de cada grupo vem de
-`prc_hicp_manr`.
-
-```
-valor do grupo i = despesa total × (ponderador i ÷ soma dos ponderadores)
-```
-        """)
-        st.warning("""
-**Este número não é um cabaz de compras.**
-
-Não há quilos, nem litros, nem unidades. A aplicação trabalha com **despesa em
-euros**, não com quantidades físicas. Não sabe quantos quilos de fruta ou de
-legumes uma família compra — sabe apenas que fração do orçamento alimentar vai
-para fruta e que essa fração encareceu X %.
-
-Para raciocinar em quantidades seria preciso o **IDEF/INE**, que recolhe consumo
-físico, ou dados de transação (e-fatura, *scanner data*).
-        """)
-        st.info("""
-**E os preços? Os supermercados praticam preços muito diferentes.**
-
-Praticam — e por isso a aplicação **não usa o preço de nenhum supermercado**.
-Usa o índice oficial do INE, que resulta da recolha mensal de preços numa
-amostra de estabelecimentos de todo o país (grande distribuição, comércio
-tradicional, canais especializados), ponderada pelo peso de cada canal e de cada
-região no consumo real.
-
-O resultado é uma **média nacional representativa**, não o preço numa insígnia
-concreta. Uma família que compre sempre no *discount* enfrenta níveis mais baixos;
-outra em zona de baixa densidade, mais altos. O índice capta bem a **variação**;
-o **nível** de cada família concreta varia em torno desta média.
-        """)
-
-    st.markdown("""
-    <div class="nota">
-      <div class="tt">O que são estes grupos</div>
-      São os nove tipos de produto em que a estatística oficial divide a alimentação.
-      A <strong>COICOP</strong> (Classificação do Consumo Individual por Objetivo) é a
-      nomenclatura internacional que o INE e o Eurostat usam para organizar a despesa
-      das famílias; o grupo 01.1 é «produtos alimentares» e 01.1.1 a 01.1.9 são as suas
-      subdivisões — na prática: pão, carne, peixe, laticínios, óleos, fruta, legumes,
-      doces e restantes.
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("#### Composição por tipo de produto")
     for inicio in range(0, len(df_decomp), 3):
         cols = st.columns(3)
         for col, (_, linha) in zip(cols, df_decomp.iloc[inicio:inicio + 3].iterrows()):
             col.markdown(cartao_classe(linha), unsafe_allow_html=True)
-    st.write("")
 
+    st.write("")
     esq, dir_ = st.columns([1, 1])
     with esq:
-        st.markdown("#### Peso de cada tipo de produto")
+        st.markdown("**Peso de cada grupo na despesa**")
+        st.caption("Fração da despesa alimentar mensal que vai para cada tipo de produto.")
         st.plotly_chart(grafico_donut(df_decomp), use_container_width=True)
     with dir_:
-        st.markdown("#### Contributo para o agravamento")
+        st.markdown("**Quanto cada grupo pesou no agravamento**")
+        st.caption("Euros de aumento nos últimos 12 meses atribuíveis a cada grupo.")
         com_dados = df_decomp.dropna(subset=["contributo"]).sort_values("contributo")
         if com_dados.empty:
             st.info("Sem variações disponíveis para o período.")
@@ -720,44 +600,90 @@ o **nível** de cada família concreta varia em torno desta média.
             fig.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
             st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("Ver tabela detalhada"):
-        tabela = df_decomp[["codigo", "classe", "ponderador", "quota",
-                            "valor", "variacao", "contributo"]].copy()
-        tabela.columns = ["Código", "Classe", "Ponderador (‰)", "Quota",
-                          "Valor (€)", "Variação (%)", "Contributo (€)"]
-        st.dataframe(
-            tabela, use_container_width=True, hide_index=True,
-            column_config={
-                "Quota": st.column_config.ProgressColumn(
-                    "Quota", format="%.1f%%", min_value=0, max_value=1),
-                "Valor (€)": st.column_config.NumberColumn(format="%.2f"),
-                "Variação (%)": st.column_config.NumberColumn(format="%.1f"),
-                "Contributo (€)": st.column_config.NumberColumn(format="%.2f"),
-                "Ponderador (‰)": st.column_config.NumberColumn(format="%.1f"),
-            },
-        )
-        st.download_button(
-            "⬇️ Descarregar decomposição (CSV)",
-            tabela.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"),
-            f"cabaz_decomposicao_{date.today()}.csv", "text/csv",
+    # ------- blocos recolhíveis lado a lado, para reduzir o deslocamento -------
+    e1, e2, e3 = st.columns(3)
+
+    with e1.expander("🧮 Como é calculado"):
+        st.markdown("""
+**1 ·** Das Contas Nacionais vem a despesa anual de todas as famílias em produtos
+alimentares. Divide-se pelo número de agregados e por doze.
+
+**2 ·** O valor é trazido ao mês corrente pelo índice oficial de preços.
+
+**3 ·** Ajusta-se à composição do agregado pela escala de equivalência.
+
+**4 ·** Reparte-se pelos nove grupos com os ponderadores oficiais do índice.
+
+As fórmulas completas estão no separador **Metodologia**.
+        """)
+        st.warning(
+            "**Não é um cabaz de compras.** Não há quilos nem litros: há euros e variações "
+            "de preço. E os preços são médias nacionais do INE, não de uma insígnia concreta."
         )
 
-    st.markdown("""
-    <div class="nota">
-      <div class="tt">O que esta decomposição é — e não é</div>
-      O valor é repartido pelas classes oficiais; não corresponde a uma observação de
-      preços produto a produto. Isto é uma <strong>reconstituição por classe COICOP</strong>, com ponderadores e
-      índices oficiais — metodologicamente defensável e replicável, mas
-      <strong>não é o preço observado produto a produto</strong>. Responde a
-      «onde está o agravamento?», não substitui a recolha.
-    </div>
-    """, unsafe_allow_html=True)
+    with e2.expander("👥 Comparar composições"):
+        comps = [(1, 0, "1 adulto"), (2, 0, "Casal"), (1, 1, "Monoparental + 1"),
+                 (1, 2, "Monoparental + 2"), (2, 1, "Casal + 1 criança"),
+                 (2, 2, "Casal + 2 crianças"), (2, 3, "Casal + 3 crianças")]
+        dm = dados.get("dimensao_media") or 2.5
+        linhas_c = []
+        for a, c, rot in comps:
+            iv = intervalo_agregado(valor_medio_agregado, dm, a, c)
+            linhas_c.append({
+                "Composição": rot, "Pessoas": a + c,
+                "Central (€)": round(despesa_do_agregado(
+                    valor_medio_agregado, dm, a, c, "ocde_original"), 2),
+                "Mín. (€)": round(iv["minimo"], 2),
+                "Máx. (€)": round(iv["maximo"], 2),
+            })
+        st.dataframe(pd.DataFrame(linhas_c), use_container_width=True, hide_index=True)
+        st.caption(
+            f"Agregado médio nacional: {('%.2f' % dm).replace('.', ',')} pessoas. "
+            "O intervalo resulta das diferentes escalas de equivalência."
+        )
+
+    with e3.expander("📋 Tabela detalhada"):
+        tabela = df_decomp[["codigo", "classe", "ponderador", "quota",
+                            "valor", "variacao", "contributo"]].copy()
+        tabela.columns = ["Código", "Grupo", "Ponderador (‰)", "Quota",
+                          "Valor (€)", "Variação (%)", "Contributo (€)"]
+        st.dataframe(tabela, use_container_width=True, hide_index=True,
+                     column_config={
+                         "Quota": st.column_config.ProgressColumn(
+                             "Quota", format="%.1f%%", min_value=0, max_value=1),
+                         "Valor (€)": st.column_config.NumberColumn(format="%.2f"),
+                         "Variação (%)": st.column_config.NumberColumn(format="%.1f"),
+                         "Contributo (€)": st.column_config.NumberColumn(format="%.2f"),
+                         "Ponderador (‰)": st.column_config.NumberColumn(format="%.1f"),
+                     })
+        st.download_button(
+            "⬇️ CSV", csv_com_fonte(tabela, "Decomposicao por grupo de produto", dados,
+                                    extra=[("Composicao do agregado", composicao),
+                                           ("Escala", ESCALAS[escala_chave]["nome"])]),
+            f"despesa_alimentar_decomposicao_{date.today()}.csv", "text/csv",
+            use_container_width=True)
 
 # ==========================================================================
 # ABA 2 — Histórico
 # ==========================================================================
 with aba2:
-    st.markdown("#### Série oficial mensal — produtos alimentares em Portugal")
+    st.markdown("#### Índice de preços dos produtos alimentares — Portugal")
+
+    base = dados.get("base_indice") or "—"
+    st.info(f"""
+**Em que consiste o índice.** Não são euros. É um número que mede o **nível dos preços**
+relativamente a um ano de referência, ao qual se atribui o valor 100. A base atualmente em
+vigor é **{base}**: se o índice estiver em 118, os preços dos produtos alimentares estão
+18 % acima do que estavam nesse ano de referência.
+
+O índice **não diz quanto custa** um cabaz — diz de quanto os preços se afastaram do
+ponto de partida. É por isso que a despesa em euros do primeiro separador precisa de uma
+âncora nas Contas Nacionais: o índice sozinho nunca daria um valor em euros.
+
+A **variação homóloga** (linha vermelha) é derivada do índice: compara cada mês com o mesmo
+mês do ano anterior.
+    """)
+
     meses = st.radio("Período", [12, 24, 36, 60], index=1, horizontal=True,
                      format_func=lambda m: f"{m} meses" if m < 60 else "5 anos")
 
@@ -771,36 +697,32 @@ with aba2:
 
     var_pt = dados["var_pt"]
     if not var_pt.empty:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Variação homóloga mais recente",
-                  percentagem(var_pt["valor"].iloc[-1]),
-                  help=f"Mês de referência: {mes_pt(var_pt['time'].iloc[-1])}")
         janela = var_pt.tail(meses)["valor"]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Variação mais recente", percentagem(var_pt["valor"].iloc[-1]),
+                  help=f"Mês de referência: {mes_pt(var_pt['time'].iloc[-1])}")
         c2.metric("Média do período", percentagem(janela.mean()))
         c3.metric("Máximo do período", percentagem(janela.max()))
+        c4.metric("Mínimo do período", percentagem(janela.min()))
 
-    st.markdown("""
-    <div class="nota">
-      <div class="tt">Porque é que a série é mensal</div>
-      A frequência mensal é a mais fina publicada por fonte oficial. Existem séries semanais de cabazes publicadas por entidades privadas, mas não
-      são dados oficiais nem têm acesso automático — e as variações semanais são muito voláteis por efeitos de base e de promoção: em
-      julho de 2026, a variação homóloga de um desses cabazes passou de +6,9 % para +4,3 %
-      numa única semana sem que nada de estrutural tivesse mudado.
-    </div>
-    """, unsafe_allow_html=True)
+    st.caption(
+        "Frequência mensal — a mais fina publicada por fonte oficial. Existem séries semanais "
+        "de cabazes publicadas por entidades privadas, mas não são dados oficiais nem têm "
+        "acesso automático, e as variações semanais são muito voláteis por efeitos de base."
+    )
 
-    with st.expander("Ver série completa"):
-        serie = dados["indice_pt"][["time", "valor"]].rename(
-            columns={"time": "Período", "valor": "Índice"})
-        var_tab = dados["var_pt"][["time", "valor"]].rename(
-            columns={"time": "Período", "valor": "Variação homóloga (%)"})
-        junto = serie.merge(var_tab, on="Período", how="outer").sort_values("Período")
-        st.dataframe(junto, use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇️ Descarregar série (CSV)",
-            junto.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"),
-            f"cabaz_serie_{date.today()}.csv", "text/csv",
-        )
+    serie = dados["indice_pt"][["time", "valor"]].rename(
+        columns={"time": "Período", "valor": f"Índice ({base})"})
+    var_tab = dados["var_pt"][["time", "valor"]].rename(
+        columns={"time": "Período", "valor": "Variação homóloga (%)"})
+    junto = serie.merge(var_tab, on="Período", how="outer").sort_values("Período")
+
+    st.download_button(
+        "⬇️ Descarregar série completa (CSV com fonte)",
+        csv_com_fonte(junto, "Serie do indice de precos alimentares - Portugal", dados,
+                      extra=[("Base do indice", base), ("Classe COICOP", "CP011")]),
+        f"despesa_alimentar_serie_{date.today()}.csv", "text/csv",
+    )
 
 # ==========================================================================
 # ABA 3 — Simulador de IVA
@@ -818,11 +740,6 @@ with aba3:
         st.session_state["cenario_iva"] = "zero"
 
     esq, dir_ = st.columns([2, 1])
-    with esq:
-        repercussao = st.slider(
-            "Repercussão no preço ao consumidor (%)", 0, 100, 40, 5,
-            help="Que fração da alteração de imposto chega efetivamente ao preço final.",
-        ) / 100
     with dir_:
         cenario = st.radio(
             "Cenário a simular",
@@ -830,6 +747,30 @@ with aba3:
             format_func=lambda k: CENARIOS[k][0],
             key="cenario_iva",
         )
+    with esq:
+        st.markdown("**Quanto da descida do imposto chega ao preço na prateleira?**")
+        repercussao = st.slider(
+            "Fração que chega ao consumidor", 0, 100, 40, 5,
+            format="%d %%", label_visibility="collapsed",
+        ) / 100
+
+        ao_consumidor = int(round(repercussao * 100))
+        na_margem = 100 - ao_consumidor
+        st.markdown(f"""
+<div style="background:#f5f7f9;border-radius:8px;padding:11px 14px;font-size:13px;margin-top:2px">
+Por cada <strong>1,00 €</strong> de imposto que o Estado deixa de cobrar:
+<div style="display:flex;gap:18px;margin-top:8px">
+  <div style="flex:1">
+    <div style="font-size:20px;font-weight:600;color:{VERDE}">{ao_consumidor} cêntimos</div>
+    <div style="font-size:11.5px;color:#4a4a48">descem o preço — poupança do consumidor</div>
+  </div>
+  <div style="flex:1">
+    <div style="font-size:20px;font-weight:600;color:{DOURADO}">{na_margem} cêntimos</div>
+    <div style="font-size:11.5px;color:#4a4a48">ficam na margem de quem vende</div>
+  </div>
+</div>
+</div>
+""", unsafe_allow_html=True)
 
     if cenario == "zero":
         st.markdown("""
@@ -846,20 +787,34 @@ with aba3:
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("""
-    <div class="nota">
-      <div class="tt">Porque é que a repercussão está a 40 % por defeito</div>
-      A avaliação internacional de reduções de IVA na alimentação e na restauração —
-      nomeadamente as experiências francesa (2009) e sueca — é
-      <strong>consistentemente cética quanto à repercussão integral no preço</strong>:
-      parte relevante do benefício é capturada na margem do operador. Os 40 % são um
-      <strong>parâmetro de trabalho, não uma estimativa</strong>. Mova o cursor para
-      testar a sensibilidade do resultado a esta hipótese.
-    </div>
-    """, unsafe_allow_html=True)
+    with st.expander("Porque é que este cursor está a 40 % — e porque é o número que mais importa"):
+        st.markdown("""
+Quando o Estado baixa o IVA, **não é garantido que o preço na loja desça na mesma medida**.
+Parte da descida pode ficar retida na margem de quem vende. A esse fenómeno chama-se
+*repercussão*, e é o parâmetro que decide se uma descida de IVA beneficia o consumidor ou o
+operador.
+
+A avaliação internacional é **consistentemente cética quanto à repercussão integral**:
+
+- **França, 2009** — descida do IVA na restauração de 19,6 % para 5,5 %. Estima-se que apenas
+  uma pequena fração tenha chegado ao preço final; a maior parte foi absorvida em margem e
+  salários.
+- **Suécia** — resultados semelhantes em avaliações do setor alimentar e da restauração.
+
+Os **40 %** são um **parâmetro de trabalho, não uma estimativa** para Portugal. Servem para
+que o resultado não seja apresentado como se a descida chegasse toda ao consumidor — o que a
+evidência não sustenta.
+
+**O que fazer com ele:** mova o cursor e observe a sensibilidade do resultado. Se a conclusão
+se mantiver entre 20 % e 60 %, é robusta. Se mudar de sinal, o resultado depende inteiramente
+de uma hipótese — e deve ser apresentado como intervalo, nunca como valor único.
+
+Repare ainda num ponto que a simulação torna visível: **a receita que o Estado deixa de cobrar
+é a mesma seja qual for a repercussão**. O que muda é apenas quem fica com o dinheiro.
+        """)
 
     editor = pd.DataFrame({
-        "Classe": [f"{r.emoji} {r.classe}" for r in df_decomp.itertuples()],
+        "Grupo": [f"{r.emoji} {r.classe}" for r in df_decomp.itertuples()],
         "Valor (€)": df_decomp["valor"].round(2),
         "Taxa atual (%)": df_decomp["iva_defeito"].astype(float),
         "Taxa do cenário (%)": df_decomp["iva_defeito"].astype(float),
@@ -869,29 +824,38 @@ with aba3:
     if taxa_forcada is not None:
         editor["Taxa do cenário (%)"] = float(taxa_forcada)
 
+    # Só as taxas que existem no Código do IVA (continente). Uma caixa de texto
+    # livre permitiria valores impossíveis — 80 %, por exemplo — e produziria
+    # resultados sem qualquer significado.
+    TAXAS_LEGAIS = [0.0, 6.0, 13.0, 23.0]
+    col_taxa = st.column_config.SelectboxColumn(
+        options=TAXAS_LEGAIS, required=True,
+        help="Taxas em vigor no continente: isenção, reduzida (6 %), intermédia (13 %), normal (23 %).",
+    )
+
     # A chave do editor tem de variar com o cenário: caso contrário o Streamlit
     # mantém o estado do widget e as taxas do cenário nunca chegam à tabela.
     editado = st.data_editor(
         editor, use_container_width=True, hide_index=True,
         key=f"editor_iva_{cenario}",
-        disabled=["Classe", "Valor (€)"],
+        disabled=["Grupo", "Valor (€)"],
         column_config={
             "Valor (€)": st.column_config.NumberColumn(format="%.2f"),
-            "Taxa atual (%)": st.column_config.NumberColumn(
-                min_value=0.0, max_value=30.0, step=0.5, format="%.1f"),
-            "Taxa do cenário (%)": st.column_config.NumberColumn(
-                min_value=0.0, max_value=30.0, step=0.5, format="%.1f"),
+            "Taxa atual (%)": col_taxa,
+            "Taxa do cenário (%)": col_taxa,
         },
     )
+
+    if cenario == "manual":
+        st.caption(
+            "Escolha a taxa de cada grupo nas duas colunas da direita. Só estão disponíveis "
+            "as taxas que existem no Código do IVA — isenção, 6 %, 13 % e 23 %."
+        )
 
     taxas_atuais = dict(zip(df_decomp["codigo"], editado["Taxa atual (%)"]))
     taxas_cenario = dict(zip(df_decomp["codigo"], editado["Taxa do cenário (%)"]))
 
     sim = simular_iva(df_decomp, taxas_atuais, taxas_cenario, repercussao)
-    agregados = st.number_input(
-        "N.º de agregados familiares (para a extrapolação ilustrativa)",
-        min_value=0, value=4_100_000, step=100_000,
-    )
     res = resumo_iva(sim, valor_cabaz, vezes_ano, agregados)
 
     c = st.columns(5)
@@ -913,6 +877,10 @@ with aba3:
         st.info("Defina um cenário diferente das taxas atuais para ver a repartição.")
 
     st.markdown("#### Ordens de grandeza a nível agregado")
+    st.caption(
+        f"Extrapolação para **{agregados:,}".replace(",", "\u00a0")
+        + "** agregados — o mesmo valor usado em toda a aplicação (ver barra lateral)."
+    )
     g1, g2 = st.columns(2)
     g1.metric("Poupança agregada anual",
               f"{res['poupanca_agregada_milhoes']:,.1f} M€".replace(",", " "))
@@ -939,9 +907,13 @@ with aba3:
                        "Efeito efetivo (€)", "Margem (€)", "Novo valor (€)"]
         st.dataframe(det.round(2), use_container_width=True, hide_index=True)
         st.download_button(
-            "⬇️ Descarregar simulação (CSV)",
-            det.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"),
-            f"cabaz_simulacao_iva_{date.today()}.csv", "text/csv",
+            "⬇️ Descarregar simulação (CSV com fonte)",
+            csv_com_fonte(det.round(2), "Simulacao de alteracao do IVA", dados,
+                          extra=[("Cenario", CENARIOS[cenario][0]),
+                                 ("Repercussao assumida", f"{repercussao*100:.0f}%"),
+                                 ("Composicao do agregado", composicao),
+                                 ("AVISO", "As taxas e a repercussao sao parametros do utilizador, nao dados oficiais")]),
+            f"despesa_alimentar_simulacao_iva_{date.today()}.csv", "text/csv",
         )
 
 # ==========================================================================
@@ -995,66 +967,73 @@ with aba4:
         st.markdown(f"""
         <div class="nota">
           <div class="tt">Como ler estes números</div>
-          A <strong>variação homóloga</strong> compara o preço de um mês com o mesmo mês
-          do ano anterior. «+4,2 %» significa que, em {mes_pt(ultimo)}, os alimentos
-          custavam mais 4,2 % do que em {mes_pt(str(int(ultimo[:4]) - 1) + ultimo[4:])}.
+          A <strong>variação homóloga</strong> compara o preço de um mês com o mesmo mês do ano
+          anterior. «+4,2 %» significa que os alimentos custavam mais 4,2 % do que um ano antes.
           Não é o preço; é o <em>ritmo a que o preço está a subir</em>.
           <br><br>
-          A <strong>posição relativa</strong> mostra esse ritmo lado a lado com os outros
-          países. Estar acima da UE-27 significa que os preços estão a subir mais depressa
-          aqui — não que sejam mais caros aqui. São coisas diferentes: um país pode ter
+          Estar acima da UE-27 significa que os preços sobem mais depressa aqui —
+          <strong>não que sejam mais caros aqui</strong>. São coisas diferentes: um país pode ter
           preços altos a subir devagar, ou preços baixos a subir depressa.
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown(f"#### Distância à média europeia em {mes_pt(ultimo)}")
-        if valor_ue is not None:
-            desvio = ranking.copy()
-            desvio["gap"] = desvio["valor"] - valor_ue
-            desvio = desvio[desvio["geo"] != "EU27_2020"].sort_values("gap")
-            figd = go.Figure(go.Bar(
-                y=desvio["pais"], x=desvio["gap"], orientation="h",
-                marker_color=[VERDE if g == "PT" else
-                              (VERMELHO if v > 0 else "#8fb3d0")
-                              for g, v in zip(desvio["geo"], desvio["gap"])],
-                text=[f"{v:+.1f} p.p.".replace(".", ",") for v in desvio["gap"]],
-                textposition="outside",
-                hovertemplate="%{y}: %{x:+.1f} p.p. face à UE-27<extra></extra>",
-            ))
-            figd.update_layout(
-                height=max(300, 30 * len(desvio)),
-                margin=dict(t=10, b=40, l=10, r=60),
-                xaxis_title="Pontos percentuais acima (→) ou abaixo (←) da UE-27",
-                plot_bgcolor="#fff", showlegend=False,
-            )
-            figd.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#64748b", zerolinewidth=2)
-            st.plotly_chart(figd, use_container_width=True)
-            st.caption(
-                "Cada barra é a diferença face à média da UE-27, em pontos percentuais. "
-                "À direita da linha central: inflação alimentar mais rápida do que na UE. "
-                "À esquerda: mais lenta. Portugal a verde."
-            )
+        st.markdown(f"#### Posição em {mes_pt(ultimo)}")
 
-        st.markdown(f"#### Ordenação em {mes_pt(ultimo)}")
-        fig2 = go.Figure(go.Bar(
-            y=ranking["pais"], x=ranking["valor"], orientation="h",
-            marker_color=[VERDE if g == "PT" else (AZUL if g == "EU27_2020" else "#b7c2ce")
-                          for g in ranking["geo"]],
-            text=[f"{v:.1f} %" for v in ranking["valor"]], textposition="outside",
+        ordenado = ranking.sort_values("valor", ascending=True)
+        cores, etiquetas = [], []
+        for geo, valor in zip(ordenado["geo"], ordenado["valor"]):
+            gap = (valor - valor_ue) if valor_ue is not None else None
+            if geo == "PT":
+                cores.append(VERDE)
+            elif geo == "EU27_2020":
+                cores.append(AZUL)
+            elif gap is not None and gap > 0:
+                cores.append("#e08b84")
+            else:
+                cores.append("#8fb3d0")
+            if gap is None or geo == "EU27_2020":
+                etiquetas.append(f"{valor:.1f} %".replace(".", ","))
+            else:
+                etiquetas.append(
+                    f"{valor:.1f} %  ({gap:+.1f} p.p.)".replace(".", ","))
+
+        figc = go.Figure(go.Bar(
+            y=ordenado["pais"], x=ordenado["valor"], orientation="h",
+            marker_color=cores, text=etiquetas, textposition="outside",
             hovertemplate="%{y}: %{x:.1f} %<extra></extra>",
         ))
-        fig2.update_layout(height=max(320, 30 * len(ranking)),
-                           margin=dict(t=10, b=30, l=10, r=40),
-                           xaxis_title="Variação homóloga (%)", plot_bgcolor="#fff")
-        fig2.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
-        st.plotly_chart(fig2, use_container_width=True)
+        if valor_ue is not None:
+            figc.add_vline(
+                x=valor_ue, line_width=2, line_dash="dash", line_color="#64748b",
+                annotation_text=f"média UE-27: {valor_ue:.1f} %".replace(".", ","),
+                annotation_position="top",
+            )
+        figc.update_layout(
+            height=max(330, 34 * len(ordenado)),
+            margin=dict(t=42, b=40, l=10, r=120),
+            xaxis_title="Variação homóloga dos preços alimentares (%)",
+            plot_bgcolor="#fff", showlegend=False,
+        )
+        figc.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
+        st.plotly_chart(figc, use_container_width=True)
+        st.caption(
+            "Barras ordenadas pela variação homóloga. A linha tracejada é a média da UE-27: "
+            "à direita, inflação alimentar mais rápida do que na UE; à esquerda, mais lenta. "
+            "Entre parênteses, a distância à média em pontos percentuais. Portugal a verde."
+        )
 
         if valor_ue is not None:
             tabela_b = ranking[["pais", "valor"]].copy()
             tabela_b["Face à UE-27 (p.p.)"] = (tabela_b["valor"] - valor_ue).round(1)
             tabela_b.columns = ["País", "Variação homóloga (%)", "Face à UE-27 (p.p.)"]
-            st.dataframe(tabela_b.sort_values("Variação homóloga (%)", ascending=False),
-                         use_container_width=True, hide_index=True)
+            tabela_b = tabela_b.sort_values("Variação homóloga (%)", ascending=False)
+            st.download_button(
+                "⬇️ Descarregar comparação (CSV com fonte)",
+                csv_com_fonte(tabela_b, "Comparacao europeia da inflacao alimentar", dados,
+                              extra=[("Mes de referencia", ultimo),
+                                     ("Indicador", "Variacao homologa do IHPC, classe CP011")]),
+                f"despesa_alimentar_ue27_{date.today()}.csv", "text/csv",
+            )
 
 # ==========================================================================
 # ABA 5 — Metodologia e fontes
@@ -1066,7 +1045,7 @@ with aba5:
         "desenvolve estes pontos com as referências legais."
     )
 
-    with st.expander("📘 O que é o IHPC — e porque não é o mesmo que o IPC", expanded=True):
+    with st.expander("📘 O que é o IHPC — e porque não é o mesmo que o IPC"):
         st.markdown("""
 O **IHPC — Índice Harmonizado de Preços no Consumidor** é o índice de inflação construído
 segundo metodologia comum a todos os Estados-Membros, precisamente para que os valores sejam
@@ -1163,38 +1142,44 @@ uma refeição como se partilha um teto. Aplicá-la ao consumo alimentar **subes
 dos agregados maiores, que são justamente o grupo politicamente sensível.
         """)
 
-    st.markdown("#### Origem dos dados")
-    st.dataframe(pd.DataFrame([
-        {"Elemento": "Ponderadores por classe", "Fonte": "Eurostat / INE",
-         "Conjunto": "prc_hicp_inw", "O que mede": "Fração de cada mil euros de consumo total (‰)"},
-        {"Elemento": "Índice de preços", "Fonte": "Eurostat / INE",
-         "Conjunto": "prc_hicp_midx", "O que mede": "Nível do índice — não são euros"},
-        {"Elemento": "Variação homóloga", "Fonte": "Eurostat / INE",
-         "Conjunto": "prc_hicp_manr", "O que mede": "Subida face ao mesmo mês do ano anterior (%)"},
-        {"Elemento": "Despesa alimentar (âncora)", "Fonte": "Eurostat / INE",
-         "Conjunto": "nama_10_co3_p3", "O que mede": "Despesa efetiva em euros (Contas Nacionais)"},
-        {"Elemento": "Dimensão do agregado", "Fonte": "Eurostat (EU-SILC)",
-         "Conjunto": "ilc_lvph01", "O que mede": "N.º médio de pessoas por agregado"},
-        {"Elemento": "Total de agregados", "Fonte": "Parâmetro do utilizador",
-         "Conjunto": "—", "O que mede": "Divisor da despesa nacional"},
-        {"Elemento": "Taxas de IVA", "Fonte": "Predefinidas, editáveis",
-         "Conjunto": "CIVA, Lista I", "O que mede": "A validar por produto"},
-        {"Elemento": "Repercussão", "Fonte": "Parâmetro do utilizador",
-         "Conjunto": "—", "O que mede": "Hipótese, não estimativa"},
-    ]), use_container_width=True, hide_index=True)
+    with st.expander("🗂️ Origem dos dados — conjuntos utilizados e ligações"):
+        st.markdown("""
+Todos os dados quantitativos são obtidos em direto do **Eurostat**, que difunde as estatísticas
+compiladas pelos institutos nacionais — no caso português, o **INE**. As ligações abrem
+diretamente o conjunto no Data Browser do Eurostat.
 
-    st.info("""
-**Nota sobre os ponderadores.** Somam 1 000 ‰ sobre **todo** o cabaz do IHPC — não sobre a
-alimentação. As nove classes alimentares somam apenas o peso da alimentação no consumo total.
-Por isso o cálculo normaliza pela soma das nove, e não pelos 1 000 ‰.
-    """)
+| Elemento | Conjunto | O que mede | Frequência |
+|---|---|---|---|
+| Ponderadores por grupo | [`prc_hicp_inw`](https://ec.europa.eu/eurostat/databrowser/view/prc_hicp_inw/default/table) | Fração de cada mil euros de consumo total (‰) | Anual |
+| Índice de preços | [`prc_hicp_midx`](https://ec.europa.eu/eurostat/databrowser/view/prc_hicp_midx/default/table) | Nível do índice — não são euros | Mensal |
+| Variação homóloga | [`prc_hicp_manr`](https://ec.europa.eu/eurostat/databrowser/view/prc_hicp_manr/default/table) | Subida face ao mesmo mês do ano anterior (%) | Mensal |
+| Despesa alimentar (âncora) | [`nama_10_co3_p3`](https://ec.europa.eu/eurostat/databrowser/view/nama_10_co3_p3/default/table) | Despesa efetiva em euros (Contas Nacionais) | Anual |
+| Dimensão do agregado | [`ilc_lvph01`](https://ec.europa.eu/eurostat/databrowser/view/ilc_lvph01/default/table) | N.º médio de pessoas por agregado | Anual |
+| N.º de agregados | [`lfst_hhnhtych`](https://ec.europa.eu/eurostat/databrowser/view/lfst_hhnhtych/default/table) | Total de agregados familiares (milhares) | Anual |
 
-    st.markdown("#### Registo das ligações desta sessão")
-    st.dataframe(pd.DataFrame(dados["registo"],
-                              columns=["Dados pedidos", "Via de acesso usada",
-                                       "N.º de observações"]),
-                 use_container_width=True, hide_index=True)
-    st.info("""
+**Parâmetros que não são dados oficiais**
+
+| Parâmetro | Origem | Nota |
+|---|---|---|
+| Taxas de IVA | Predefinidas, editáveis | Limitadas às do Código do IVA; correspondência ao grupo COICOP é aproximada |
+| Repercussão | Parâmetro do utilizador | Hipótese de trabalho, não estimativa |
+
+**Recuo do n.º de agregados:** se o conjunto anual do Eurostat não estiver disponível ou
+devolver um valor implausível, a aplicação usa o valor censitário — **4 149 096** agregados
+domésticos privados ([INE, Censos 2021](https://www.ine.pt)).
+        """)
+        st.info(
+            "**Sobre os ponderadores.** Somam 1 000 ‰ sobre **todo** o cabaz do índice — não "
+            "sobre a alimentação. Os nove grupos alimentares somam apenas o peso da alimentação "
+            "no consumo total. Por isso o cálculo normaliza pela soma dos nove, e não pelos 1 000 ‰."
+        )
+
+    with st.expander("🔌 Registo das ligações desta sessão"):
+        st.dataframe(pd.DataFrame(dados["registo"],
+                                  columns=["Dados pedidos", "Via de acesso usada",
+                                           "N.º de observações"]),
+                     use_container_width=True, hide_index=True)
+        st.info("""
 **«SDMX» não é um método de ponderação — é a via de acesso aos dados.**
 
 SDMX (*Statistical Data and Metadata eXchange*) é a norma internacional de troca de dados
@@ -1207,7 +1192,7 @@ aplicação foi buscar os números**:
 
 Ambas devolvem **os mesmos números oficiais**. A via usada não afeta os resultados; consta aqui
 apenas para diagnóstico.
-    """)
+        """)
 
     st.markdown("#### Limitações a declarar em qualquer uso")
     st.markdown("""

@@ -219,3 +219,18 @@ def dimensao_agregado(desde_ano: int) -> tuple[pd.DataFrame, str]:
         {"freq": "A", "geo": "PT", "sinceTimePeriod": str(desde_ano)},
         inicio=str(desde_ano),
     )
+
+
+def numero_agregados(desde_ano: int) -> tuple[pd.DataFrame, str]:
+    """
+    Número total de agregados familiares (milhares), fonte Inquérito ao Emprego (EU-LFS).
+
+    Complementa o valor censitário: é anual, ao passo que os Censos são decenais.
+    Se não estiver disponível, a aplicação recorre ao valor dos Censos.
+    """
+    return obter(
+        "lfst_hhnhtych",
+        "A.THS.TOTAL.TOTAL.PT",
+        {"freq": "A", "geo": "PT", "sinceTimePeriod": str(desde_ano)},
+        inicio=str(desde_ano),
+    )

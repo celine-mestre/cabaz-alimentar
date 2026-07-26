@@ -61,6 +61,15 @@ PAISES = {
 PAISES_POR_DEFEITO = ["PT", "EU27_2020", "ES", "FR"]
 
 # --------------------------------------------------------------------------
+# Número de agregados familiares — divisor da despesa nacional
+# --------------------------------------------------------------------------
+# Valor de referência oficial. Os Censos são a fonte autoritativa para o número
+# de agregados: é um apuramento exaustivo, não uma estimativa por amostragem.
+AGREGADOS_CENSOS = 4_149_096
+AGREGADOS_FONTE = "INE, Censos 2021 (resultados definitivos)"
+AGREGADOS_ANO = 2021
+
+# --------------------------------------------------------------------------
 # Metadados institucionais
 # --------------------------------------------------------------------------
 ORGANISMO = "Secretaria-Geral do Governo"

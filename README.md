@@ -204,10 +204,33 @@ harmonizado de preços no consumidor (IHPC) compilado pelos institutos nacionais
 |---|---|---|
 | Despesa alimentar (âncora em euros) | `nama_10_co3_p3` | Anual |
 | Dimensão média do agregado | `ilc_lvph01` | Anual |
+| Número de agregados familiares | `lfst_hhnhtych` (recuo: Censos 2021) | Anual |
 | Ponderadores por classe | `prc_hicp_inw` | Anual |
 | Índice de preços | `prc_hicp_midx` | Mensal |
 | Variação homóloga | `prc_hicp_manr` | Mensal |
 | Comparação UE-27 | `prc_hicp_manr` | Mensal |
+
+### O número de agregados familiares
+
+É o **divisor** de todo o cálculo: a despesa alimentar nacional é dividida por ele para obter
+a despesa de um agregado. Duplicá-lo reduz o resultado a metade, pelo que não pode ser um
+valor arbitrário.
+
+A aplicação usa, por esta ordem:
+
+1. **Eurostat / Inquérito ao Emprego** (`lfst_hhnhtych`) — valor anual, o mais recente disponível;
+2. **INE, Censos 2021** — **4 149 096** agregados domésticos privados, se o anterior falhar.
+
+O valor obtido é submetido a **verificação de plausibilidade** (entre 3,0 e 6,5 milhões). Fora
+desse intervalo, presume-se que o conjunto devolvido não é o esperado e recorre-se ao valor
+censitário, registando a ocorrência no diagnóstico. A despesa resultante é igualmente
+verificada (entre 50 € e 3 000 € mensais por agregado); fora disso a aplicação mostra um erro
+e desaconselha o uso dos números.
+
+O campo está **bloqueado por defeito**. Existe uma opção de ajuste manual, destinada apenas a
+testar cenários — quando ativada com um valor diferente do oficial, a aplicação avisa que os
+resultados deixam de ser reproduzíveis a partir de fontes oficiais.
+
 
 ### A âncora em euros
 
