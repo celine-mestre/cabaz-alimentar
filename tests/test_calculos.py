@@ -117,3 +117,30 @@ def test_efeito_da_escala_inverte_na_dimensao_media():
     for escala in ("per_capita", "ocde_original", "ocde_modificada"):
         serie = [despesa_do_agregado(media, dim, 1, c, escala) for c in range(0, 5)]
         assert serie == sorted(serie)
+
+
+def test_esforco_constante_quando_escalas_coincidem():
+    """
+    Se a despesa e o rendimento usarem a mesma escala de equivalência, o esforço
+    alimentar é constante seja qual for a composição do agregado — ambos os lados
+    escalam de forma idêntica. A variação observada na aplicação resulta, portanto,
+    da diferença entre a escala escolhida para a despesa e a OCDE modificada, que
+    o EU-SILC impõe ao rendimento. Propriedade a preservar.
+    """
+    from src.calculos import despesa_do_agregado, unidades_equivalentes
+
+    media, dim, rendimento_eq = 422.54, 2.4, 11500.0
+    esforcos = []
+    for adultos, criancas in [(1, 0), (2, 0), (2, 2), (2, 4), (3, 1)]:
+        desp = despesa_do_agregado(media, dim, adultos, criancas, "ocde_modificada")
+        rend = rendimento_eq * unidades_equivalentes(adultos, criancas, "ocde_modificada") / 12
+        esforcos.append(desp / rend * 100)
+    assert max(esforcos) - min(esforcos) < 1e-9
+
+    # com escalas diferentes, o esforço tem de crescer com a dimensão
+    crescentes = []
+    for adultos, criancas in [(1, 0), (2, 0), (2, 2), (2, 4)]:
+        desp = despesa_do_agregado(media, dim, adultos, criancas, "ocde_original")
+        rend = rendimento_eq * unidades_equivalentes(adultos, criancas, "ocde_modificada") / 12
+        crescentes.append(desp / rend * 100)
+    assert crescentes == sorted(crescentes)

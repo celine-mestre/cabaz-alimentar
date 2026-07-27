@@ -406,6 +406,45 @@ deve fazer-se acompanhar destas ressalvas:
 
 ---
 
+## Tipografia institucional
+
+A aplicação usa a **Lexend**, tipo de letra das normas gráficas da SGGov. É aplicada em três
+camadas, porque nenhuma isolada cobre tudo:
+
+1. **Tema do Streamlit** (`.streamlit/config.toml`) — `font` e `headingFont` no formato
+   `Família:URL`, suportado a partir do Streamlit 1.50. Cobre a generalidade da interface.
+2. **CSS injetado** (`app.py`) — cobre componentes que não herdam sempre do tema: métricas,
+   tabelas, widgets, barra lateral. O código mantém tipo monoespaçado, por legibilidade.
+3. **Template do Plotly** — os gráficos são desenhados em SVG e **não herdam a fonte da
+   página**. A função `grafico()` impõe a Lexend e usa `theme=None`, para que o tema do
+   Streamlit não sobreponha o template institucional.
+
+### Consideração de privacidade
+
+A fonte é servida pelo **Google Fonts**. Isso significa que o navegador de cada utilizador
+estabelece ligação a servidores da Google, transmitindo o endereço IP. Para uma aplicação da
+Administração Pública, é uma dependência a ponderar.
+
+Alternativa sem dependência externa: descarregar os ficheiros `.woff2` da Lexend para uma pasta
+`static/` no repositório e declará-los localmente:
+
+```toml
+[server]
+enableStaticServing = true
+
+[[theme.fontFaces]]
+family = "Lexend"
+url = "app/static/Lexend-Regular.woff2"
+weight = 400
+style = "normal"
+
+[theme]
+font = "Lexend, sans-serif"
+```
+
+Nesse caso, é preciso substituir também o `@import` do CSS em `app.py` por uma declaração
+`@font-face` apontando ao mesmo caminho.
+
 ## Manutenção
 
 **Periodicidade dos dados.** O Eurostat publica o IHPC mensalmente, cerca de duas

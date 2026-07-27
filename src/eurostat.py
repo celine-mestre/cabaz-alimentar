@@ -332,3 +332,50 @@ def salario_minimo(geos, desde_ano: int) -> tuple[pd.DataFrame, str]:
             ultimo = exc
             continue
     raise ErroEurostat(f"earn_mw_cur — nenhuma chave respondeu ({ultimo})")
+
+
+# A ordem das dimensões do EU-SILC varia entre versões do conjunto.
+RENDIMENTO_CHAVES = [
+    "A.EUR.MED_E.T.TOTAL",
+    "A.EUR.MED_E.TOTAL.T",
+    "A.EUR.MED_E.T.Y_GE16",
+]
+
+
+def rendimento(geos, desde_ano: int, indicador: str = "MEI_E") -> tuple[pd.DataFrame, str]:
+    """
+    Rendimento monetário líquido **equivalente** das famílias, em euros (EU-SILC).
+
+    `indicador`:
+      - ``MEI_E`` — média (*mean equivalised net income*)
+      - ``MED_E`` — mediana
+
+    «Equivalente» significa que já vem dividido pelas unidades de consumo do
+    agregado, segundo a escala OCDE modificada. Multiplicando pelas unidades
+    equivalentes de um agregado obtém-se o rendimento desse agregado.
+
+    A escolha entre média e mediana não é indiferente: a despesa alimentar
+    usada nesta aplicação deriva de um **agregado nacional dividido pelo número
+    de agregados**, ou seja, é uma **média**. Combiná-la com um rendimento
+    mediano misturaria duas medidas de tendência central diferentes e inflaria
+    o rácio, porque a mediana do rendimento é inferior à média.
+    """
+    geos = list(geos)
+    ultimo = None
+    for chave in [f"A.EUR.{indicador}.T.TOTAL",
+                  f"A.EUR.{indicador}.TOTAL.T",
+                  f"A.EUR.{indicador}.T.Y_GE16"]:
+        try:
+            df, via = obter(
+                "ilc_di03",
+                f"{chave}.{'+'.join(geos)}",
+                {"freq": "A", "unit": "EUR", "indic_il": indicador,
+                 "geo": geos, "sinceTimePeriod": str(desde_ano)},
+                inicio=str(desde_ano),
+            )
+            if not df.empty:
+                return df, via
+        except Exception as exc:                             # noqa: BLE001
+            ultimo = exc
+            continue
+    raise ErroEurostat(f"ilc_di03 ({indicador}) — nenhuma chave respondeu ({ultimo})")

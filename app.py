@@ -11,6 +11,7 @@ from datetime import date, datetime
 
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 
 from pathlib import Path
@@ -31,6 +32,23 @@ try:
 except Exception:                                          # noqa: BLE001
     LOGO = ""
 
+# Tipografia institucional também nos gráficos: o Plotly desenha em SVG e não
+# herda a fonte da página, pelo que tem de ser declarada no template.
+_TEMPLATE_SGGOV = go.layout.Template(
+    layout=dict(
+        font=dict(family="Lexend, Arial, sans-serif", size=13, color="#171715"),
+        title=dict(font=dict(family="Lexend, Arial, sans-serif")),
+        legend=dict(font=dict(family="Lexend, Arial, sans-serif", size=12)),
+        hoverlabel=dict(font=dict(family="Lexend, Arial, sans-serif", size=12)),
+        xaxis=dict(title=dict(font=dict(family="Lexend, Arial, sans-serif")),
+                   tickfont=dict(family="Lexend, Arial, sans-serif")),
+        yaxis=dict(title=dict(font=dict(family="Lexend, Arial, sans-serif")),
+                   tickfont=dict(family="Lexend, Arial, sans-serif")),
+    )
+)
+pio.templates["sggov"] = _TEMPLATE_SGGOV
+pio.templates.default = "plotly_white+sggov"
+
 st.set_page_config(
     page_title="Cabaz alimentar — UPE/SGGov",
     page_icon="🛒",
@@ -44,7 +62,23 @@ st.set_page_config(
 st.markdown(f"""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700&display=swap');
-  html, body, [class*="css"] {{ font-family: 'Lexend', Arial, sans-serif; }}
+
+  /* Tipografia institucional — o tema já a define, mas alguns componentes
+     (widgets, tabelas, tooltips) não a herdam sempre. */
+  html, body, .stApp, [class*="css"], [class*="st-"],
+  button, input, select, textarea, label,
+  h1, h2, h3, h4, h5, h6, p, span, div, li, td, th,
+  [data-testid="stMetricValue"], [data-testid="stMetricLabel"],
+  [data-testid="stMarkdownContainer"], [data-testid="stDataFrame"],
+  [data-testid="stSidebar"], [data-baseweb] {{
+    font-family: 'Lexend', Arial, Helvetica, sans-serif !important;
+  }}
+  /* O código mantém tipo monoespaçado, por legibilidade */
+  code, pre, kbd, samp, [data-testid="stCode"],
+  [class*="st-"] code, [class*="css"] code, [data-testid="stMarkdownContainer"] code,
+  [class*="st-"] pre, .stApp code, .stApp pre {{
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  }}
 
   .barra {{
     display: flex; align-items: center; gap: 11px;
@@ -180,6 +214,16 @@ def carregar_dados(anos_historico: int = 6):
         registo.append(("Despesa alimentar por país", f"indisponível ({exc})", 0))
     engel_df = pd.concat(partes_engel, ignore_index=True) if len(partes_engel) == 2 else pd.DataFrame()
 
+    rend_por_tipo = {}
+    for indic, nome_indic in [("MEI_E", "médio"), ("MED_E", "mediano")]:
+        try:
+            df_r, via_r = eurostat.rendimento(list(PAISES.keys()), ano - 4, indic)
+            registo.append((f"Rendimento {nome_indic} equivalente", via_r, len(df_r)))
+            rend_por_tipo[indic] = df_r
+        except Exception as exc:                               # noqa: BLE001
+            registo.append((f"Rendimento {nome_indic} equivalente",
+                            f"indisponível ({exc})", 0))
+
     try:
         sm_df, via9 = eurostat.salario_minimo(list(PAISES.keys()), ano - 3)
         registo.append(("Salário mínimo nacional", via9, len(sm_df)))
@@ -271,6 +315,15 @@ def carregar_dados(anos_historico: int = 6):
                 engel[geo] = {"ano": a, "quota": f / t * 100,
                               "total": t, "alimentar": f}
 
+    rendimento = {}
+    for indic, df_r in rend_por_tipo.items():
+        rendimento[indic] = {}
+        for geo in df_r["geo"].unique():
+            sub = df_r[df_r["geo"] == geo].sort_values("time")
+            if not sub.empty:
+                rendimento[indic][geo] = {"ano": str(sub["time"].iloc[-1]),
+                                          "valor": float(sub["valor"].iloc[-1])}
+
     salario = {}
     if not sm_df.empty:
         for geo in sm_df["geo"].unique():
@@ -280,6 +333,7 @@ def carregar_dados(anos_historico: int = 6):
                                 "valor": float(sub["valor"].iloc[-1])}
 
     return {
+        "rendimento": rendimento,
         "engel": engel,
         "salario": salario,
         "pli": pli_df,
@@ -349,6 +403,22 @@ def ancora_oficial(dados: dict, agregados: int) -> dict | None:
 # ==========================================================================
 # Componentes visuais
 # ==========================================================================
+def grafico(fig, **kwargs):
+    """
+    Apresenta um gráfico com a tipografia institucional.
+
+    O `st.plotly_chart` aplica por defeito o tema do Streamlit, que sobrepõe a
+    fonte definida na figura. Com `theme=None` prevalece o template próprio,
+    onde a Lexend está declarada — o Plotly desenha em SVG e não herda a fonte
+    da página.
+    """
+    fig.update_layout(
+        font=dict(family="Lexend, Arial, sans-serif", color="#171715"),
+        hoverlabel=dict(font=dict(family="Lexend, Arial, sans-serif")),
+    )
+    st.plotly_chart(fig, use_container_width=True, theme=None, **kwargs)
+
+
 def csv_com_fonte(df: pd.DataFrame, titulo: str, dados: dict, extra=None) -> bytes:
     """
     Exporta em CSV com cabeçalho de proveniência, para que o ficheiro seja
@@ -690,7 +760,7 @@ with aba1:
     r2.metric("Equivalente anual", euro(valor_medio_agregado * 12))
     eng_pt = (dados.get("engel") or {}).get("PT")
     if eng_pt:
-        r3.metric("Fatia do consumo das famílias em alimentação",
+        r3.metric("Do que as famílias gastam, vai para comida",
                   f"{eng_pt['quota']:.1f} %".replace(".", ","),
                   help=(f"Coeficiente de Engel, {eng_pt['ano']}. Quanto do consumo total "
                         "das famílias portuguesas vai para comida. Comparação europeia "
@@ -721,7 +791,7 @@ contributos de todos os grupos dá exatamente o agravamento total dos últimos 1
     with esq:
         st.markdown("**Peso de cada grupo na despesa**")
         st.caption("Fração da despesa alimentar mensal que vai para cada tipo de produto.")
-        st.plotly_chart(grafico_donut(df_decomp), use_container_width=True)
+        grafico(grafico_donut(df_decomp))
     with dir_:
         st.markdown("**Quanto cada grupo pesou no agravamento**")
         st.caption("Euros de aumento nos últimos 12 meses atribuíveis a cada grupo.")
@@ -738,7 +808,7 @@ contributos de todos os grupos dá exatamente o agravamento total dos últimos 1
             fig.update_layout(height=380, margin=dict(t=10, b=30, l=10, r=10),
                               xaxis_title="Euros", plot_bgcolor="#fff")
             fig.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
-            st.plotly_chart(fig, use_container_width=True)
+            grafico(fig)
 
     # ------- blocos recolhíveis lado a lado, para reduzir o deslocamento -------
     e1, e2, e3 = st.columns(3)
@@ -848,10 +918,7 @@ mês do ano anterior.
             (dados["var_pt"]["time"] >= inicio_sel) &
             (dados["var_pt"]["time"] <= fim_sel)]
 
-        st.plotly_chart(
-            grafico_historico(idx_sel, var_sel, len(idx_sel)),
-            use_container_width=True,
-        )
+        grafico(grafico_historico(idx_sel, var_sel, len(idx_sel)))
 
         if len(idx_sel) >= 2:
             acum = (idx_sel["valor"].iloc[-1] / idx_sel["valor"].iloc[0] - 1) * 100
@@ -1041,7 +1108,7 @@ Repare ainda num ponto que a simulação torna visível: **a receita que o Estad
     fig_rep = grafico_reparticao(sim)
     if fig_rep is not None:
         st.markdown("#### Como se reparte o benefício")
-        st.plotly_chart(fig_rep, use_container_width=True)
+        grafico(fig_rep)
     else:
         st.info("Defina um cenário diferente das taxas atuais para ver a repartição.")
 
@@ -1153,7 +1220,7 @@ with aba4:
                                xaxis_title="Nível de preços dos alimentos (média UE-27 = 100)",
                                plot_bgcolor="#fff", showlegend=False)
             figp.update_xaxes(gridcolor="#eef1f4")
-            st.plotly_chart(figp, use_container_width=True)
+            grafico(figp)
             st.caption(
                 "Barras à direita da linha: alimentos mais caros do que a média europeia. "
                 "À esquerda: mais baratos. Portugal a verde. Fonte: programa de Paridades de "
@@ -1176,11 +1243,28 @@ with aba4:
         else:
             st.markdown("""
 **O coeficiente de Engel.** É a fração do consumo total das famílias que vai para alimentação.
-Chama-se assim por **Ernst Engel**, o estatístico que em 1857 formulou a regularidade que
-ainda hoje se verifica: *quanto menor o rendimento, maior a fatia do orçamento gasta em comida*.
+Chama-se assim por **Ernst Engel**, o estatístico que em 1857 formulou a regularidade que ainda
+hoje se verifica: *quanto menor o rendimento, maior a fatia do orçamento gasta em comida*.
 
-É, por isso, um dos indicadores mais antigos e mais robustos de bem-estar económico — e
-comparável entre países sem necessidade de conversão cambial, por ser um rácio.
+É um dos indicadores mais antigos e mais robustos de bem-estar económico — e comparável entre
+países sem conversão cambial, por ser um rácio.
+            """)
+            st.warning("""
+**Atenção: este número não tem salários no denominador.**
+
+O coeficiente de Engel é **despesa sobre despesa** — não despesa sobre rendimento:
+
+| | Numerador | Denominador |
+|---|---|---|
+| **Coeficiente de Engel** (aqui) | O que as famílias gastam em **comida** | O que as famílias gastam em **tudo** |
+| **Esforço alimentar** (bloco seguinte) | O que o agregado gasta em **comida** | O que o agregado **recebe** |
+
+Por isso os dois números são diferentes e não se substituem. Este mede **como se reparte o
+orçamento de consumo**; o seguinte mede **quanto do rendimento é absorvido pela comida**.
+
+E também por isso **este indicador não responde à composição do agregado** que escolheu na
+barra lateral: é um rácio macroeconómico nacional — a despesa alimentar de *todas* as famílias
+sobre o consumo total de *todas* elas. Não existe versão «por agregado» nas Contas Nacionais.
             """)
 
             linhas_e = []
@@ -1195,9 +1279,11 @@ comparável entre países sem necessidade de conversão cambial, por ser um rác
             ue_e = engel.get("EU27_2020")
             if pt_e:
                 e1, e2, e3 = st.columns(3)
-                e1.metric(f"Portugal em {pt_e['ano']}",
+                e1.metric(f"Portugal ({pt_e['ano']}) — do que gastam",
                           f"{pt_e['quota']:.1f} %".replace(".", ","),
-                          help="Fração do consumo das famílias que vai para alimentação")
+                          help=("De cada 100 € que as famílias portuguesas gastam em tudo "
+                                "— casa, transportes, saúde, lazer —, esta fração vai para "
+                                "alimentação. Não envolve salários nem rendimentos."))
                 if ue_e:
                     dif = pt_e["quota"] - ue_e["quota"]
                     dif_txt = f"{dif:+.1f}".replace(".", ",") + " p.p."
@@ -1224,33 +1310,142 @@ comparável entre países sem necessidade de conversão cambial, por ser um rác
                                xaxis_title="Fatia do consumo das famílias gasta em alimentação (%)",
                                plot_bgcolor="#fff", showlegend=False)
             figE.update_xaxes(gridcolor="#eef1f4")
-            st.plotly_chart(figE, use_container_width=True)
+            grafico(figE)
             st.caption(
                 "Barras mais longas significam **maior esforço alimentar**: mais do orçamento "
                 "familiar absorvido por comida, menos disponível para tudo o resto. "
                 "Fonte: Contas Nacionais (`nama_10_co3_p3`), rácio CP011/CP00. Publicação anual."
             )
 
-            # ---- esforço face ao salário mínimo ----
+            # ---- esforço do agregado escolhido ----
+            st.divider()
+            st.markdown(f"#### E o esforço do agregado que escolheu — {composicao}?")
+
+            rendimentos = dados.get("rendimento") or {}
             salario = dados.get("salario") or {}
             sm_pt = salario.get("PT")
-            if sm_pt and valor_medio_agregado:
-                st.divider()
-                st.markdown("#### E face ao salário mínimo?")
-                quota_sm = valor_medio_agregado / sm_pt["valor"] * 100
-                s1, s2, s3 = st.columns(3)
-                s1.metric(f"Salário mínimo ({sm_pt['periodo']})", euro(sm_pt["valor"]))
-                s2.metric("Despesa alimentar do agregado médio", euro(valor_medio_agregado))
-                s3.metric("Fatia do salário mínimo",
-                          f"{quota_sm:.0f} %".replace(".", ","))
-                st.warning(
-                    "**Leitura com cautela.** Este rácio compara a despesa alimentar de um "
-                    "agregado **médio** com **um** salário mínimo. A maioria dos agregados tem "
-                    "mais do que um rendimento, e nem todos os rendimentos são o salário mínimo. "
-                    "Serve para dimensionar o esforço no limite inferior da distribuição, não "
-                    "para caracterizar o agregado típico. Uma medida rigorosa exigiria a "
-                    "distribuição de rendimentos por agregado — via IDEF ou EU-SILC."
+            tem_rend = any(rendimentos.get(k, {}).get("PT") for k in ("MEI_E", "MED_E"))
+
+            if not tem_rend and not sm_pt:
+                st.info(
+                    "Os indicadores de rendimento não estão disponíveis nesta sessão. "
+                    "Consulte o registo de ligações no separador Metodologia."
                 )
+            else:
+                if tem_rend:
+                    disponiveis = [k for k in ("MEI_E", "MED_E") if rendimentos.get(k, {}).get("PT")]
+                    nomes_r = {"MEI_E": "Média — coerente com a despesa",
+                               "MED_E": "Mediana — agregado do meio da distribuição"}
+                    indic_r = st.radio(
+                        "Referência de rendimento", disponiveis,
+                        format_func=lambda k: nomes_r[k], horizontal=True,
+                    )
+                    rend_pt = rendimentos[indic_r]["PT"]
+
+                    ue_ocde = unidades_equivalentes(adultos, criancas, "ocde_modificada")
+                    rend_agregado = rend_pt["valor"] * ue_ocde / 12
+                    esforco = valor_cabaz / rend_agregado * 100 if rend_agregado else None
+
+                    st.markdown(f"""
+**Como se chega a este número, passo a passo:**
+
+1. O Eurostat publica o rendimento líquido **{'médio' if indic_r == 'MEI_E' else 'mediano'}
+   equivalente** de Portugal: **{euro(rend_pt['valor'])} por ano** ({rend_pt['ano']}). É por
+   *unidade de consumo equivalente*, não por pessoa nem por agregado.
+2. Este agregado — **{composicao}** — vale **{('%.2f' % ue_ocde).replace('.', ',')} unidades**
+   na escala OCDE modificada, que é a que o EU-SILC usa.
+3. Rendimento anual do agregado: {euro(rend_pt['valor'])} ×
+   {('%.2f' % ue_ocde).replace('.', ',')} = **{euro(rend_pt['valor'] * ue_ocde)}**.
+4. Por mês: **{euro(rend_agregado)}**.
+5. A despesa alimentar deste agregado é **{euro(valor_cabaz)}** por mês.
+6. Esforço = {euro(valor_cabaz)} ÷ {euro(rend_agregado)} =
+   **{f"{esforco:.1f}".replace(".", ",") if esforco else "—"} %**.
+                    """)
+
+                    g1, g2, g3 = st.columns(3)
+                    g1.metric("Rendimento mensal do agregado", euro(rend_agregado))
+                    g2.metric("Despesa alimentar mensal", euro(valor_cabaz))
+                    if esforco is not None:
+                        g3.metric("Esforço alimentar",
+                                  f"{esforco:.1f} %".replace(".", ","))
+
+                    if esforco is not None:
+                        figE2 = go.Figure(go.Bar(
+                            x=[esforco, 100 - esforco], y=["", ""], orientation="h",
+                            marker_color=[VERDE, "#e2e8f0"],
+                            text=[f"alimentação {esforco:.0f} %".replace(".", ","),
+                                  f"tudo o resto {100 - esforco:.0f} %".replace(".", ",")],
+                            textposition="inside", insidetextanchor="middle",
+                            hovertemplate="%{x:.1f} %<extra></extra>"))
+                        figE2.update_layout(barmode="stack", height=110,
+                                            margin=dict(t=10, b=10, l=10, r=10),
+                                            showlegend=False, plot_bgcolor="#fff",
+                                            xaxis=dict(visible=False), yaxis=dict(visible=False))
+                        grafico(figE2)
+
+                    if indic_r == "MED_E":
+                        st.warning(
+                            "**Está a usar a mediana.** A despesa alimentar desta aplicação "
+                            "deriva de um agregado nacional dividido pelo número de agregados — "
+                            "ou seja, é uma **média**. Combiná-la com um rendimento **mediano** "
+                            "mistura duas medidas de tendência central diferentes e **inflaciona "
+                            "o esforço**, porque a mediana é inferior à média. Use a mediana para "
+                            "caracterizar o agregado do meio da distribuição, mas prefira a média "
+                            "quando quiser um rácio internamente coerente."
+                        )
+
+                if sm_pt:
+                    st.divider()
+                    st.markdown("**Face ao salário mínimo nacional**")
+                    s1, s2, s3 = st.columns(3)
+                    s1.metric(f"Salário mínimo ({sm_pt['periodo']})", euro(sm_pt["valor"]))
+                    quota_sm = valor_cabaz / sm_pt["valor"] * 100
+                    s2.metric("Com um salário mínimo",
+                              f"{quota_sm:.0f} %".replace(".", ","))
+                    if adultos >= 2:
+                        s3.metric(f"Com {adultos} salários mínimos",
+                                  f"{valor_cabaz / (sm_pt['valor'] * adultos) * 100:.0f} %".replace(".", ","))
+                    st.caption(
+                        "O salário mínimo é um **valor bruto legal**, não o rendimento "
+                        "disponível: não desconta contribuições nem impostos, nem inclui "
+                        "prestações sociais. Serve para dimensionar o esforço no limite inferior "
+                        "da distribuição — não é comparável com o rendimento líquido acima."
+                    )
+
+                with st.expander("⚠️ O que este cálculo assume — leitura obrigatória"):
+                    st.markdown(f"""
+**1 · O agregado está na mediana.** O rendimento usado é o **mediano equivalente** do EU-SILC.
+Agregados abaixo da mediana têm esforço **superior** ao apresentado — e é justamente aí que a
+pressão alimentar mais se faz sentir. Uma medida por escalão de rendimento exigiria o IDEF/INE
+ou microdados do EU-SILC.
+
+**2 · Numerador e denominador usam escalas diferentes — e isso condiciona o resultado.**
+
+A despesa alimentar é ajustada pela escala que escolheu na barra lateral
+(**{ESCALAS[escala_chave]["nome"].split(" (")[0]}**). O rendimento tem de usar a **OCDE
+modificada**, porque é essa que o EU-SILC aplica para equivalizar. São escalas diferentes, e a
+consequência é mensurável:
+
+| Escala usada na despesa | 1 adulto | Casal | Casal + 2 |
+|---|---|---|---|
+| OCDE modificada (igual à do rendimento) | 25,9 % | 25,9 % | 25,9 % |
+| OCDE original | 22,3 % | 25,2 % | 28,6 % |
+| Per capita | 18,4 % | 24,5 % | 35,0 % |
+
+*(valores ilustrativos, com dados de referência)*
+
+Se as duas escalas forem a mesma, **o esforço é constante** seja qual for a composição — porque
+ambos os lados escalam de forma idêntica. A subida com o número de pessoas resulta, portanto,
+da **diferença entre as escalas**.
+
+Isso não invalida a leitura: a alimentação tem economias de escala genuinamente mais fracas do
+que o consumo total, pelo que é legítimo que o esforço alimentar suba com a dimensão do
+agregado. Mas a **magnitude** do aumento depende da escala escolhida, não só da realidade.
+
+**Como usar:** leia a **direção** (o esforço aumenta com filhos) como robusta; leia o **valor
+exato** como condicional à escala. E teste sempre a sensibilidade mudando a escala na barra
+lateral.
+                    """)
 
             with st.expander("Descarregar dados do esforço"):
                 tab_e = df_e[["pais", "quota", "ano"]].copy()
@@ -1324,7 +1519,7 @@ comparável entre países sem necessidade de conversão cambial, por ser um rác
                               hovermode="x unified", plot_bgcolor="#fff")
             fig.update_xaxes(showgrid=False)
             fig.update_yaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
-            st.plotly_chart(fig, use_container_width=True)
+            grafico(fig)
 
             ultimo = tempos_b[-1]
             ranking = pd.DataFrame([
@@ -1367,7 +1562,7 @@ comparável entre países sem necessidade de conversão cambial, por ser um rác
                                xaxis_title="Variação homóloga dos preços alimentares (%)",
                                plot_bgcolor="#fff", showlegend=False)
             figc.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
-            st.plotly_chart(figc, use_container_width=True)
+            grafico(figc)
             st.caption(
                 "A linha tracejada é a média da UE-27: à direita, inflação mais rápida do que na "
                 "UE; à esquerda, mais lenta. Entre parênteses, a distância em pontos percentuais."
