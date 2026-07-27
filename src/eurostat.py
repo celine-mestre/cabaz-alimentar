@@ -259,3 +259,45 @@ def nivel_precos(geos, categoria: str, desde_ano: int) -> tuple[pd.DataFrame, st
          "geo": geos, "sinceTimePeriod": str(desde_ano)},
         inicio=str(desde_ano),
     )
+
+
+def despesa_total_consumo(geos, desde_ano: int) -> tuple[pd.DataFrame, str]:
+    """
+    Despesa final das famílias — total (CP00) e alimentação (CP011) — por país.
+
+    O rácio entre as duas é o **coeficiente de Engel**: a fração do consumo das
+    famílias que vai para alimentação. É o indicador clássico de esforço
+    alimentar, e é diretamente comparável entre países.
+    """
+    geos = list(geos)
+    return obter(
+        "nama_10_co3_p3",
+        f"A.CP_MEUR.CP00+CP011.{'+'.join(geos)}",
+        {"freq": "A", "unit": "CP_MEUR", "coicop": ["CP00", "CP011"],
+         "geo": geos, "sinceTimePeriod": str(desde_ano)},
+        inicio=str(desde_ano),
+    )
+
+
+# Códigos candidatos para o salário mínimo mensal em euros.
+SM_CANDIDATOS = ["S1.EUR.MW", "S1.MW.EUR", "S1.EUR.NAT"]
+
+
+def salario_minimo(geos, desde_ano: int) -> tuple[pd.DataFrame, str]:
+    """Salário mínimo nacional mensal, em euros (semestral)."""
+    geos = list(geos)
+    ultimo = None
+    for chave in SM_CANDIDATOS:
+        try:
+            df, via = obter(
+                "earn_mw_cur",
+                f"{chave}.{'+'.join(geos)}",
+                {"currency": "EUR", "geo": geos, "sinceTimePeriod": str(desde_ano)},
+                inicio=str(desde_ano),
+            )
+            if not df.empty:
+                return df, via
+        except Exception as exc:                             # noqa: BLE001
+            ultimo = exc
+            continue
+    raise ErroEurostat(f"earn_mw_cur — nenhuma chave respondeu ({ultimo})")

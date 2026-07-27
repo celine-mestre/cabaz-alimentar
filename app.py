@@ -162,6 +162,21 @@ def carregar_dados(anos_historico: int = 6):
     if pli_df.empty:
         registo.append(("Nível de preços comparado", "indisponível", 0))
 
+    # Esforço alimentar — coeficiente de Engel (alimentação / consumo total)
+    try:
+        engel_df, via8 = eurostat.despesa_total_consumo(list(PAISES.keys()), ano - 5)
+        registo.append(("Consumo total e alimentar (Engel)", via8, len(engel_df)))
+    except Exception as exc:                                   # noqa: BLE001
+        engel_df, via8 = pd.DataFrame(), f"indisponível ({exc})"
+        registo.append(("Consumo total e alimentar (Engel)", via8, 0))
+
+    try:
+        sm_df, via9 = eurostat.salario_minimo(list(PAISES.keys()), ano - 3)
+        registo.append(("Salário mínimo nacional", via9, len(sm_df)))
+    except Exception as exc:                                   # noqa: BLE001
+        sm_df, via9 = pd.DataFrame(), f"indisponível ({exc})"
+        registo.append(("Salário mínimo nacional", via9, 0))
+
     # --- ponderadores: ano mais recente de cada classe ---
     pesos_df = pesos_df.sort_values("time")
     pesos = pesos_df.groupby("coicop")["valor"].last().to_dict()
@@ -227,7 +242,36 @@ def carregar_dados(anos_historico: int = 6):
         rec = dim_df.sort_values("time").iloc[-1]
         dimensao_ano, dimensao_media = str(rec["time"]), float(rec["valor"])
 
+    # --- coeficiente de Engel por país, ano mais recente comum ---
+    engel = {}
+    if not engel_df.empty:
+        for geo in engel_df["geo"].unique():
+            sub = engel_df[engel_df["geo"] == geo]
+            tot = sub[sub["coicop"] == "CP00"].sort_values("time")
+            ali = sub[sub["coicop"] == "CP011"].sort_values("time")
+            if tot.empty or ali.empty:
+                continue
+            anos_comuns = sorted(set(tot["time"]) & set(ali["time"]))
+            if not anos_comuns:
+                continue
+            a = anos_comuns[-1]
+            t = float(tot[tot["time"] == a]["valor"].iloc[0])
+            f = float(ali[ali["time"] == a]["valor"].iloc[0])
+            if t > 0:
+                engel[geo] = {"ano": a, "quota": f / t * 100,
+                              "total": t, "alimentar": f}
+
+    salario = {}
+    if not sm_df.empty:
+        for geo in sm_df["geo"].unique():
+            sub = sm_df[sm_df["geo"] == geo].sort_values("time")
+            if not sub.empty:
+                salario[geo] = {"periodo": str(sub["time"].iloc[-1]),
+                                "valor": float(sub["valor"].iloc[-1])}
+
     return {
+        "engel": engel,
+        "salario": salario,
         "pli": pli_df,
         "pli_cat": pli_cat,
         "agregados_valor": agregados_valor,
@@ -499,7 +543,11 @@ with st.sidebar:
     st.caption("**Composição do agregado**")
     ca, cb = st.columns(2)
     adultos = ca.number_input("Adultos", min_value=1, max_value=8, value=2, step=1)
-    criancas = cb.number_input("Crianças (<14)", min_value=0, max_value=8, value=0, step=1)
+    criancas = cb.number_input(
+        "Crianças (<14 anos)", min_value=0, max_value=8, value=0, step=1,
+        help=("14 anos é o limiar definido pelas próprias escalas de equivalência "
+              "da OCDE e do Eurostat — não é a definição demográfica de criança. "
+              "Ver separador Metodologia."))
 
     dim_efetiva = dim_media if dim_media else DIMENSAO_RECUO
     escala_chave = st.selectbox(
@@ -625,12 +673,25 @@ with aba1:
     colunas[4].metric("Equivalente anual", euro(valor_cabaz * vezes_ano))
 
     dim_txt = ('%.1f' % dim_efetiva).replace('.', ',')
-    st.caption(
-        f"Para referência, o **agregado médio português — {dim_txt} pessoas** — gasta "
-        f"**{euro(valor_medio_agregado)}** por mês em alimentação "
-        f"({euro(valor_medio_agregado * 12)} por ano). "
-        f"O valor acima está ajustado para {composicao}."
-    )
+    r1, r2, r3 = st.columns([1, 1, 2])
+    r1.metric(f"Agregado médio nacional ({dim_txt} pessoas)",
+              euro(valor_medio_agregado),
+              help="Valor de referência antes de qualquer ajustamento de composição.")
+    r2.metric("Equivalente anual", euro(valor_medio_agregado * 12))
+    eng_pt = (dados.get("engel") or {}).get("PT")
+    if eng_pt:
+        r3.metric("Fatia do consumo das famílias em alimentação",
+                  f"{eng_pt['quota']:.1f} %".replace(".", ","),
+                  help=(f"Coeficiente de Engel, {eng_pt['ano']}. Quanto do consumo total "
+                        "das famílias portuguesas vai para comida. Comparação europeia "
+                        "no separador UE-27."))
+    else:
+        r3.markdown(
+        f"<div style='padding-top:14px;font-size:12.5px;color:#4a4a48'>"
+        f"É este o ponto de partida do cálculo: a despesa alimentar de um agregado "
+        f"com a dimensão média portuguesa ({dim_txt} pessoas). Os valores em cima "
+        f"estão ajustados para <strong>{composicao}</strong>.</div>",
+        unsafe_allow_html=True)
 
     st.info("""
 **Como ler os cartões.** O valor grande é quanto da despesa mensal vai para esse grupo.
@@ -1018,200 +1079,298 @@ Repare ainda num ponto que a simulação torna visível: **a receita que o Estad
 # ABA 4 — Comparação UE-27
 # ==========================================================================
 with aba4:
-    st.markdown("#### Inflação alimentar comparada (IHPC, variação homóloga)")
+    vista = st.radio(
+        "O que quer ver",
+        ["💶 Quão caros são os alimentos",
+         "🧾 Que fatia do orçamento consomem",
+         "📈 A que ritmo estão a subir"],
+        horizontal=True, label_visibility="collapsed",
+    )
+    ver_precos = vista.startswith("💶")
+    ver_esforco = vista.startswith("🧾")
 
-    cpais, cgrupo = st.columns([3, 2])
-    with cpais:
-        escolhidos = st.multiselect(
-            "Países", options=list(PAISES.keys()),
-            default=[p for p in PAISES_POR_DEFEITO if p in PAISES],
-            format_func=lambda g: PAISES[g],
-        )
-    with cgrupo:
-        opcoes_grupo = [COICOP_ALIMENTAR] + CODIGOS
-        rotulos = {COICOP_ALIMENTAR: "🍽️ Todos os alimentos"}
-        rotulos.update({c["cod"]: f"{c['emoji']} {c['nome']}" for c in CLASSES})
-        grupo_sel = st.selectbox(
-            "Grupo de produto", options=opcoes_grupo,
-            format_func=lambda g: rotulos[g],
-            help="Compare a inflação de um tipo de produto específico entre países.",
-        )
+    st.info(
+        "**São três perguntas diferentes.** «Quão caros são» compara o *nível* dos preços entre "
+        "países. «Que fatia do orçamento consomem» mede o *esforço* das famílias — quanto do que "
+        "gastam vai para comida. «A que ritmo sobem» compara a *inflação*. Um país pode ter "
+        "preços baixos e ainda assim um esforço alimentar elevado, se os rendimentos forem "
+        "baixos — e é esse cruzamento que interessa à política."
+    )
 
-    bench_todos = dados["bench_todos"]
-    bench = {}
-    _ts = {}
-    for _, linha_b in bench_todos[bench_todos["coicop"] == grupo_sel].iterrows():
-        bench.setdefault(linha_b["geo"], {})[linha_b["time"]] = linha_b["valor"]
-        _ts[linha_b["time"]] = 1
-    tempos_b = sorted(_ts)
-    if grupo_sel != COICOP_ALIMENTAR:
-        st.caption(
-            f"A comparar **{rotulos[grupo_sel].split(' ', 1)[1]}**. "
-            "Grupos individuais são bastante mais voláteis do que o agregado alimentar — "
-            "a fruta e os legumes, em particular, sofrem efeitos sazonais e climáticos fortes."
-        )
-    if not escolhidos or not tempos_b:
-        st.info("Selecione pelo menos um país.")
-    else:
-        fig = go.Figure()
-        paleta = [VERDE, AZUL, DOURADO, VERMELHO, "#7a5ea8", "#c2681a",
-                  "#0f8f9c", "#4a7c3f", "#8f4a6b", "#5a6b8f", "#a0568f", "#2980b9"]
-        for i, geo in enumerate(escolhidos):
-            if geo not in bench:
-                continue
-            serie = pd.DataFrame({"time": tempos_b,
-                                  "valor": [bench[geo].get(t) for t in tempos_b]})
-            fig.add_trace(go.Scatter(
-                x=[mes_pt(t) for t in serie["time"]], y=serie["valor"],
-                name=PAISES[geo],
-                line=dict(color=paleta[i % len(paleta)],
-                          width=3.2 if geo == "PT" else 1.9,
-                          dash="dot" if geo == "EU27_2020" else "solid"),
-                hovertemplate="%{x}<br>%{y:.1f} %<extra>" + PAISES[geo] + "</extra>",
-            ))
-        fig.update_layout(height=420, margin=dict(t=20, b=40, l=10, r=10),
-                          yaxis_title="Variação homóloga (%)",
-                          legend=dict(orientation="h", y=1.12, x=0),
-                          hovermode="x unified", plot_bgcolor="#fff")
-        fig.update_xaxes(showgrid=False)
-        fig.update_yaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
-        st.plotly_chart(fig, use_container_width=True)
-
-        # --- ranking do último mês ---
-        ultimo = tempos_b[-1]
-        ranking = pd.DataFrame([
-            {"geo": g, "valor": v[ultimo]}
-            for g, v in bench.items() if v.get(ultimo) is not None
-        ])
-        ranking["pais"] = ranking["geo"].map(PAISES)
-        ranking = ranking.dropna(subset=["pais"]).sort_values("valor", ascending=True)
-
-        ue = ranking.loc[ranking["geo"] == "EU27_2020", "valor"]
-        valor_ue = float(ue.iloc[0]) if not ue.empty else None
-
-        st.markdown(f"""
-        <div class="nota">
-          <div class="tt">Como ler estes números</div>
-          A <strong>variação homóloga</strong> compara o preço de um mês com o mesmo mês do ano
-          anterior. «+4,2 %» significa que os alimentos custavam mais 4,2 % do que um ano antes.
-          Não é o preço; é o <em>ritmo a que o preço está a subir</em>.
-          <br><br>
-          Estar acima da UE-27 significa que os preços sobem mais depressa aqui —
-          <strong>não que sejam mais caros aqui</strong>. São coisas diferentes: um país pode ter
-          preços altos a subir devagar, ou preços baixos a subir depressa.
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown(f"#### Posição em {mes_pt(ultimo)}")
-
-        ordenado = ranking.sort_values("valor", ascending=True)
-        cores, etiquetas = [], []
-        for geo, valor in zip(ordenado["geo"], ordenado["valor"]):
-            gap = (valor - valor_ue) if valor_ue is not None else None
-            if geo == "PT":
-                cores.append(VERDE)
-            elif geo == "EU27_2020":
-                cores.append(AZUL)
-            elif gap is not None and gap > 0:
-                cores.append("#e08b84")
-            else:
-                cores.append("#8fb3d0")
-            if gap is None or geo == "EU27_2020":
-                etiquetas.append(f"{valor:.1f} %".replace(".", ","))
-            else:
-                etiquetas.append(
-                    f"{valor:.1f} %  ({gap:+.1f} p.p.)".replace(".", ","))
-
-        figc = go.Figure(go.Bar(
-            y=ordenado["pais"], x=ordenado["valor"], orientation="h",
-            marker_color=cores, text=etiquetas, textposition="outside",
-            hovertemplate="%{y}: %{x:.1f} %<extra></extra>",
-        ))
-        if valor_ue is not None:
-            figc.add_vline(
-                x=valor_ue, line_width=2, line_dash="dash", line_color="#64748b",
-                annotation_text=f"média UE-27: {valor_ue:.1f} %".replace(".", ","),
-                annotation_position="top",
-            )
-        figc.update_layout(
-            height=max(330, 34 * len(ordenado)),
-            margin=dict(t=42, b=40, l=10, r=120),
-            xaxis_title="Variação homóloga dos preços alimentares (%)",
-            plot_bgcolor="#fff", showlegend=False,
-        )
-        figc.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
-        st.plotly_chart(figc, use_container_width=True)
-        st.caption(
-            "Barras ordenadas pela variação homóloga. A linha tracejada é a média da UE-27: "
-            "à direita, inflação alimentar mais rápida do que na UE; à esquerda, mais lenta. "
-            "Entre parênteses, a distância à média em pontos percentuais. Portugal a verde."
-        )
-
-        if valor_ue is not None:
-            tabela_b = ranking[["pais", "valor"]].copy()
-            tabela_b["Face à UE-27 (p.p.)"] = (tabela_b["valor"] - valor_ue).round(1)
-            tabela_b.columns = ["País", "Variação homóloga (%)", "Face à UE-27 (p.p.)"]
-            tabela_b = tabela_b.sort_values("Variação homóloga (%)", ascending=False)
-            st.download_button(
-                "⬇️ Descarregar comparação (CSV com fonte)",
-                csv_com_fonte(tabela_b, "Comparacao europeia da inflacao alimentar", dados,
-                              extra=[("Mes de referencia", ultimo),
-                                     ("Indicador", "Variacao homologa do IHPC, classe CP011")]),
-                f"despesa_alimentar_ue27_{date.today()}.csv", "text/csv",
-            )
-
-    # ---------- nível de preços comparado ----------
     pli = dados.get("pli")
-    if pli is not None and not pli.empty:
-        st.divider()
-        st.markdown("#### E os preços? São mais caros em Portugal?")
-        st.info("""
-A inflação diz o **ritmo a que os preços sobem** — não diz se são altos ou baixos. Para isso
-existe outro indicador: o **índice de nível de preços**, que compara quanto custa o mesmo
-cabaz de bens em cada país, corrigido pelo câmbio, com a média da UE-27 = 100.
 
-Um país pode ter preços **baixos a subir depressa** ou **altos a subir devagar** — e as duas
-situações exigem respostas de política diferentes.
-        """)
-
-        ano_pli = pli["time"].max()
-        pli_ult = pli[pli["time"] == ano_pli].copy()
-        pli_ult["pais"] = pli_ult["geo"].map(PAISES)
-        pli_ult = pli_ult.dropna(subset=["pais"]).sort_values("valor")
-
-        figp = go.Figure(go.Bar(
-            y=pli_ult["pais"], x=pli_ult["valor"], orientation="h",
-            marker_color=[VERDE if g == "PT" else (AZUL if g == "EU27_2020" else "#b7c2ce")
-                          for g in pli_ult["geo"]],
-            text=[f"{v:.0f}".replace(".", ",") for v in pli_ult["valor"]],
-            textposition="outside",
-            hovertemplate="%{y}: %{x:.0f} (UE-27 = 100)<extra></extra>",
-        ))
-        figp.add_vline(x=100, line_width=2, line_dash="dash", line_color="#64748b",
-                       annotation_text="média UE-27", annotation_position="top")
-        figp.update_layout(height=max(300, 32 * len(pli_ult)),
-                           margin=dict(t=42, b=40, l=10, r=60),
-                           xaxis_title="Nível de preços dos alimentos (UE-27 = 100)",
-                           plot_bgcolor="#fff", showlegend=False)
-        figp.update_xaxes(gridcolor="#eef1f4")
-        st.plotly_chart(figp, use_container_width=True)
-
-        pt_pli = pli_ult.loc[pli_ult["geo"] == "PT", "valor"]
-        if not pt_pli.empty:
-            v = float(pt_pli.iloc[0])
-            posicao = ("acima" if v > 100 else "abaixo")
-            dif_txt = f"{abs(v - 100):.0f}".replace(".", ",")
-            idx_txt = f"{v:.0f}".replace(".", ",")
-            st.caption(
-                f"Em {ano_pli}, os alimentos em Portugal custavam **{dif_txt} % {posicao}** "
-                f"da média da UE-27 (índice {idx_txt}). "
-                "Fonte: programa de Paridades de Poder de Compra Eurostat-OCDE "
-                f"(`prc_ppp_ind_1`, categoria `{dados.get('pli_cat')}`). Publicação anual."
+    # ==================== VISTA: NÍVEL DE PREÇOS ====================
+    if ver_precos:
+        if pli is None or pli.empty:
+            st.warning(
+                "O índice de nível de preços não está disponível nesta sessão. "
+                "Consulte o registo de ligações no separador Metodologia. "
+                "Use entretanto a vista «A que ritmo estão a subir»."
             )
-        st.caption(
-            "Nota: este indicador é **anual** e tem maior desfasamento do que o índice de "
-            "preços mensal. Serve para situar Portugal em nível, não para acompanhar conjuntura."
-        )
+        else:
+            ano_pli = pli["time"].max()
+            pli_ult = pli[pli["time"] == ano_pli].copy()
+            pli_ult["pais"] = pli_ult["geo"].map(PAISES)
+            pli_ult = pli_ult.dropna(subset=["pais"]).sort_values("valor")
+
+            pt_pli = pli_ult.loc[pli_ult["geo"] == "PT", "valor"]
+            if not pt_pli.empty:
+                v = float(pt_pli.iloc[0])
+                posicao = "mais caros" if v > 100 else "mais baratos"
+                d1, d2, d3 = st.columns(3)
+                d1.metric(f"Portugal em {ano_pli}", f"{v:.0f}".replace(".", ","),
+                          help="Índice: média da UE-27 = 100")
+                d2.metric("Face à média da UE-27",
+                          f"{abs(v - 100):.0f} % {posicao}".replace(".", ","))
+                posto = int((pli_ult["geo"] != "EU27_2020").cumsum()[
+                    pli_ult["geo"] == "PT"].iloc[0])
+                total = int((pli_ult["geo"] != "EU27_2020").sum())
+                d3.metric("Posição", f"{posto}.º de {total}",
+                          help="Do mais barato para o mais caro, entre os países selecionados")
+
+            figp = go.Figure(go.Bar(
+                y=pli_ult["pais"], x=pli_ult["valor"], orientation="h",
+                marker_color=[VERDE if g == "PT" else (AZUL if g == "EU27_2020" else "#b7c2ce")
+                              for g in pli_ult["geo"]],
+                text=[f"{x:.0f}".replace(".", ",") for x in pli_ult["valor"]],
+                textposition="outside",
+                hovertemplate="%{y}: %{x:.0f} (UE-27 = 100)<extra></extra>",
+            ))
+            figp.add_vline(x=100, line_width=2, line_dash="dash", line_color="#64748b",
+                           annotation_text="média UE-27", annotation_position="top")
+            figp.update_layout(height=max(320, 34 * len(pli_ult)),
+                               margin=dict(t=42, b=40, l=10, r=70),
+                               xaxis_title="Nível de preços dos alimentos (média UE-27 = 100)",
+                               plot_bgcolor="#fff", showlegend=False)
+            figp.update_xaxes(gridcolor="#eef1f4")
+            st.plotly_chart(figp, use_container_width=True)
+            st.caption(
+                "Barras à direita da linha: alimentos mais caros do que a média europeia. "
+                "À esquerda: mais baratos. Portugal a verde. Fonte: programa de Paridades de "
+                f"Poder de Compra Eurostat-OCDE (`prc_ppp_ind_1`, categoria "
+                f"`{dados.get('pli_cat')}`). Publicação **anual** — indicador de nível, não de "
+                "conjuntura."
+            )
+
+    # ==================== VISTA: ESFORÇO (COEFICIENTE DE ENGEL) ====================
+    elif ver_esforco:
+        engel = dados.get("engel") or {}
+        if not engel:
+            st.warning(
+                "O indicador de esforço não está disponível nesta sessão. "
+                "Consulte o registo de ligações no separador Metodologia."
+            )
+        else:
+            st.markdown("""
+**O coeficiente de Engel.** É a fração do consumo total das famílias que vai para alimentação.
+Chama-se assim por **Ernst Engel**, o estatístico que em 1857 formulou a regularidade que
+ainda hoje se verifica: *quanto menor o rendimento, maior a fatia do orçamento gasta em comida*.
+
+É, por isso, um dos indicadores mais antigos e mais robustos de bem-estar económico — e
+comparável entre países sem necessidade de conversão cambial, por ser um rácio.
+            """)
+
+            linhas_e = []
+            for geo, d in engel.items():
+                if geo not in PAISES:
+                    continue
+                linhas_e.append({"geo": geo, "pais": PAISES[geo],
+                                 "quota": d["quota"], "ano": d["ano"]})
+            df_e = pd.DataFrame(linhas_e).sort_values("quota")
+
+            pt_e = engel.get("PT")
+            ue_e = engel.get("EU27_2020")
+            if pt_e:
+                e1, e2, e3 = st.columns(3)
+                e1.metric(f"Portugal em {pt_e['ano']}",
+                          f"{pt_e['quota']:.1f} %".replace(".", ","),
+                          help="Fração do consumo das famílias que vai para alimentação")
+                if ue_e:
+                    dif = pt_e["quota"] - ue_e["quota"]
+                    dif_txt = f"{dif:+.1f}".replace(".", ",") + " p.p."
+                    e2.metric("Face à média da UE-27", dif_txt)
+                posto = int((df_e["geo"] != "EU27_2020").cumsum()[
+                    df_e["geo"] == "PT"].iloc[0])
+                total_p = int((df_e["geo"] != "EU27_2020").sum())
+                e3.metric("Posição", f"{posto}.º de {total_p}",
+                          help="Do menor esforço para o maior")
+
+            figE = go.Figure(go.Bar(
+                y=df_e["pais"], x=df_e["quota"], orientation="h",
+                marker_color=[VERDE if g == "PT" else (AZUL if g == "EU27_2020" else "#b7c2ce")
+                              for g in df_e["geo"]],
+                text=[f"{v:.1f} %".replace(".", ",") for v in df_e["quota"]],
+                textposition="outside",
+                hovertemplate="%{y}: %{x:.1f} % do consumo<extra></extra>"))
+            if ue_e:
+                figE.add_vline(x=ue_e["quota"], line_width=2, line_dash="dash",
+                               line_color="#64748b", annotation_text="média UE-27",
+                               annotation_position="top")
+            figE.update_layout(height=max(320, 34 * len(df_e)),
+                               margin=dict(t=42, b=40, l=10, r=80),
+                               xaxis_title="Fatia do consumo das famílias gasta em alimentação (%)",
+                               plot_bgcolor="#fff", showlegend=False)
+            figE.update_xaxes(gridcolor="#eef1f4")
+            st.plotly_chart(figE, use_container_width=True)
+            st.caption(
+                "Barras mais longas significam **maior esforço alimentar**: mais do orçamento "
+                "familiar absorvido por comida, menos disponível para tudo o resto. "
+                "Fonte: Contas Nacionais (`nama_10_co3_p3`), rácio CP011/CP00. Publicação anual."
+            )
+
+            # ---- esforço face ao salário mínimo ----
+            salario = dados.get("salario") or {}
+            sm_pt = salario.get("PT")
+            if sm_pt and valor_medio_agregado:
+                st.divider()
+                st.markdown("#### E face ao salário mínimo?")
+                quota_sm = valor_medio_agregado / sm_pt["valor"] * 100
+                s1, s2, s3 = st.columns(3)
+                s1.metric(f"Salário mínimo ({sm_pt['periodo']})", euro(sm_pt["valor"]))
+                s2.metric("Despesa alimentar do agregado médio", euro(valor_medio_agregado))
+                s3.metric("Fatia do salário mínimo",
+                          f"{quota_sm:.0f} %".replace(".", ","))
+                st.warning(
+                    "**Leitura com cautela.** Este rácio compara a despesa alimentar de um "
+                    "agregado **médio** com **um** salário mínimo. A maioria dos agregados tem "
+                    "mais do que um rendimento, e nem todos os rendimentos são o salário mínimo. "
+                    "Serve para dimensionar o esforço no limite inferior da distribuição, não "
+                    "para caracterizar o agregado típico. Uma medida rigorosa exigiria a "
+                    "distribuição de rendimentos por agregado — via IDEF ou EU-SILC."
+                )
+
+            with st.expander("Descarregar dados do esforço"):
+                tab_e = df_e[["pais", "quota", "ano"]].copy()
+                tab_e.columns = ["País", "Fatia do consumo em alimentação (%)", "Ano"]
+                tab_e["Fatia do consumo em alimentação (%)"] = \
+                    tab_e["Fatia do consumo em alimentação (%)"].round(1)
+                st.dataframe(tab_e.sort_values("Fatia do consumo em alimentação (%)",
+                                               ascending=False),
+                             use_container_width=True, hide_index=True)
+                st.download_button(
+                    "⬇️ CSV com fonte",
+                    csv_com_fonte(tab_e, "Coeficiente de Engel - esforco alimentar", dados,
+                                  extra=[("Indicador", "Despesa alimentar / consumo total das familias"),
+                                         ("Conjunto", "nama_10_co3_p3, CP011 / CP00")]),
+                    f"despesa_alimentar_engel_{date.today()}.csv", "text/csv")
+
+    # ==================== VISTA: INFLAÇÃO ====================
+    else:
+        cpais, cgrupo = st.columns([3, 2])
+        with cpais:
+            escolhidos = st.multiselect(
+                "Países", options=list(PAISES.keys()),
+                default=[p for p in PAISES_POR_DEFEITO if p in PAISES],
+                format_func=lambda g: PAISES[g],
+            )
+        with cgrupo:
+            opcoes_grupo = [COICOP_ALIMENTAR] + CODIGOS
+            rotulos = {COICOP_ALIMENTAR: "🍽️ Todos os alimentos"}
+            rotulos.update({c["cod"]: f"{c['emoji']} {c['nome']}" for c in CLASSES})
+            grupo_sel = st.selectbox(
+                "Grupo de produto", options=opcoes_grupo,
+                format_func=lambda g: rotulos[g],
+                help="Compare a inflação de um tipo de produto específico entre países.",
+            )
+
+        bench_todos = dados["bench_todos"]
+        bench, _ts = {}, {}
+        for _, lb in bench_todos[bench_todos["coicop"] == grupo_sel].iterrows():
+            bench.setdefault(lb["geo"], {})[lb["time"]] = lb["valor"]
+            _ts[lb["time"]] = 1
+        tempos_b = sorted(_ts)
+
+        if grupo_sel != COICOP_ALIMENTAR:
+            st.caption(
+                f"A comparar **{rotulos[grupo_sel].split(' ', 1)[1]}**. Grupos individuais são "
+                "bastante mais voláteis do que o agregado alimentar — a fruta e os legumes, em "
+                "particular, sofrem efeitos sazonais e climáticos fortes."
+            )
+
+        if not escolhidos or not tempos_b:
+            st.info("Selecione pelo menos um país.")
+        else:
+            fig = go.Figure()
+            paleta = [VERDE, AZUL, DOURADO, VERMELHO, "#7a5ea8", "#c2681a",
+                      "#0f8f9c", "#4a7c3f", "#8f4a6b", "#5a6b8f", "#a0568f", "#2980b9"]
+            for i, geo in enumerate(escolhidos):
+                if geo not in bench:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=[mes_pt(t) for t in tempos_b],
+                    y=[bench[geo].get(t) for t in tempos_b],
+                    name=PAISES[geo],
+                    line=dict(color=paleta[i % len(paleta)],
+                              width=3.2 if geo == "PT" else 1.9,
+                              dash="dot" if geo == "EU27_2020" else "solid"),
+                    hovertemplate="%{x}<br>%{y:.1f} %<extra>" + PAISES[geo] + "</extra>",
+                ))
+            fig.update_layout(height=400, margin=dict(t=20, b=40, l=10, r=10),
+                              yaxis_title="Variação homóloga (%)",
+                              legend=dict(orientation="h", y=1.12, x=0),
+                              hovermode="x unified", plot_bgcolor="#fff")
+            fig.update_xaxes(showgrid=False)
+            fig.update_yaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
+            st.plotly_chart(fig, use_container_width=True)
+
+            ultimo = tempos_b[-1]
+            ranking = pd.DataFrame([
+                {"geo": g, "valor": v[ultimo]}
+                for g, v in bench.items() if v.get(ultimo) is not None])
+            ranking["pais"] = ranking["geo"].map(PAISES)
+            ranking = ranking.dropna(subset=["pais"])
+            ue = ranking.loc[ranking["geo"] == "EU27_2020", "valor"]
+            valor_ue = float(ue.iloc[0]) if not ue.empty else None
+
+            st.markdown(f"#### Posição em {mes_pt(ultimo)}")
+            ordenado = ranking.sort_values("valor", ascending=True)
+            cores, etiquetas = [], []
+            for geo, valor in zip(ordenado["geo"], ordenado["valor"]):
+                gap = (valor - valor_ue) if valor_ue is not None else None
+                if geo == "PT":
+                    cores.append(VERDE)
+                elif geo == "EU27_2020":
+                    cores.append(AZUL)
+                elif gap is not None and gap > 0:
+                    cores.append("#e08b84")
+                else:
+                    cores.append("#8fb3d0")
+                if gap is None or geo == "EU27_2020":
+                    etiquetas.append(f"{valor:.1f} %".replace(".", ","))
+                else:
+                    etiquetas.append(f"{valor:.1f} %  ({gap:+.1f} p.p.)".replace(".", ","))
+
+            figc = go.Figure(go.Bar(
+                y=ordenado["pais"], x=ordenado["valor"], orientation="h",
+                marker_color=cores, text=etiquetas, textposition="outside",
+                hovertemplate="%{y}: %{x:.1f} %<extra></extra>"))
+            if valor_ue is not None:
+                figc.add_vline(x=valor_ue, line_width=2, line_dash="dash",
+                               line_color="#64748b",
+                               annotation_text=f"média UE-27: {valor_ue:.1f} %".replace(".", ","),
+                               annotation_position="top")
+            figc.update_layout(height=max(330, 34 * len(ordenado)),
+                               margin=dict(t=42, b=40, l=10, r=120),
+                               xaxis_title="Variação homóloga dos preços alimentares (%)",
+                               plot_bgcolor="#fff", showlegend=False)
+            figc.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
+            st.plotly_chart(figc, use_container_width=True)
+            st.caption(
+                "A linha tracejada é a média da UE-27: à direita, inflação mais rápida do que na "
+                "UE; à esquerda, mais lenta. Entre parênteses, a distância em pontos percentuais."
+            )
+
+            if valor_ue is not None:
+                tb = ranking[["pais", "valor"]].copy()
+                tb["Face à UE-27 (p.p.)"] = (tb["valor"] - valor_ue).round(1)
+                tb.columns = ["País", "Variação homóloga (%)", "Face à UE-27 (p.p.)"]
+                tb = tb.sort_values("Variação homóloga (%)", ascending=False)
+                st.download_button(
+                    "⬇️ Descarregar comparação (CSV com fonte)",
+                    csv_com_fonte(tb, "Comparacao europeia da inflacao alimentar", dados,
+                                  extra=[("Mes de referencia", ultimo),
+                                         ("Grupo", grupo_sel)]),
+                    f"despesa_alimentar_ue27_{date.today()}.csv", "text/csv")
 
 # ==========================================================================
 # ABA 5 — Metodologia e fontes
@@ -1393,45 +1552,121 @@ Ambas devolvem **os mesmos números oficiais**. A via usada não afeta os result
 apenas para diagnóstico.
         """)
 
-    st.markdown("#### Limitações a declarar em qualquer uso")
-    st.markdown("""
+    with st.expander("🏷️ De onde vem a classificação COICOP"):
+        st.markdown("""
+A **COICOP** — *Classification of Individual Consumption According to Purpose* — é uma
+classificação das **Nações Unidas** (Divisão de Estatística), não do Eurostat. Serve para
+organizar a despesa de consumo das famílias **por finalidade**, e é usada mundialmente nas
+Contas Nacionais e nos inquéritos às despesas.
+
+A União Europeia adota-a numa versão própria, a **ECOICOP** (*European COICOP*), tornada
+obrigatória para o índice de preços pelo Regulamento (UE) 2016/792. É por isso que os mesmos
+códigos aparecem no INE, no Eurostat e nos institutos de todos os Estados-Membros: não é uma
+convenção do Eurostat, é uma norma internacional que o Eurostat implementa.
+
+A hierarquia relevante aqui:
+
+| Nível | Código | Designação |
+|---|---|---|
+| Divisão | 01 | Produtos alimentares e bebidas não alcoólicas |
+| Grupo | 01.1 | Produtos alimentares |
+| Classes | 01.1.1 a 01.1.9 | Pão e cereais, carne, peixe, laticínios, óleos, fruta, legumes, doces, outros |
+
+Estas nove classes são usadas nesta aplicação porque são o **nível mais fino em que o Eurostat
+publica simultaneamente ponderadores e índices** para todos os Estados-Membros. Qualquer outro
+agrupamento — fresco contra processado, saudável contra não saudável — exigiria microdados que
+não existem em acesso público.
+
+*Nota: a ECOICOP foi revista com a COICOP 2018; as séries com a classificação anterior estão
+arquivadas. A aplicação usa sempre a base mais recente disponível.*
+        """)
+
+    with st.expander("👶 Porquê «crianças com menos de 14 anos» e não outra idade"):
+        st.markdown("""
+O limiar dos 14 anos **não é uma escolha desta aplicação nem a definição demográfica de
+criança**. É o limiar inscrito nas próprias escalas de equivalência:
+
+- **Escala OCDE modificada**, norma do Eurostat para o rendimento: 1,0 ao primeiro adulto,
+  0,5 a cada pessoa adicional **com 14 ou mais anos**, 0,3 a cada pessoa **com menos de 14**.
+- **Escala OCDE original**: 1,0 / 0,7 / 0,5, com o mesmo limiar.
+
+Alterar o limiar para 15, 16 ou 18 anos invalidaria os coeficientes — que foram estimados com
+aquela fronteira. Para usar outra idade seria preciso outra escala, estimada em conformidade.
+
+Isto é distinto das definições demográficas do INE, que variam consoante o contexto: nas
+estatísticas demográficas «jovens» são frequentemente os 0-14 anos; na proteção de menores, a
+menoridade vai até aos 18. São conceitos com finalidades diferentes, e não se misturam com os
+limiares das escalas de equivalência.
+        """)
+
+    with st.expander("⚠️ Limitações a declarar em qualquer uso"):
+        st.markdown("""
 1. **A decomposição não é observação.** É uma imputação de um valor total por ponderadores
    oficiais; não substitui a recolha de preços produto a produto.
 2. **Não há quantidades físicas.** A ferramenta mede despesa e variação de preço, não quilos
    nem litros. Para raciocinar em quantidades seria necessário o IDEF/INE ou dados de transação.
-3. **Os preços são médias nacionais.** O índice resulta de recolha numa amostra de
-   estabelecimentos de todo o país, ponderada por canal e região. Não corresponde ao preço de
-   nenhuma insígnia: capta bem a variação; o nível de cada família oscila em torno da média.
-4. **A âncora parte de uma média nacional.** Não distingue escalão de rendimento nem região.
-5. **As escalas de equivalência são aproximações.** Construídas para o consumo total; o agregado
-   médio é modelado como composto por adultos, porque a dimensão média é publicada sem
+3. **A âncora parte de uma média nacional.** Não distingue escalão de rendimento nem região.
+4. **As escalas de equivalência são aproximações.** Construídas para o consumo total; o
+   agregado médio é modelado como composto por adultos, porque a dimensão média é publicada sem
    decomposição etária. Daí a apresentação em intervalo.
-6. **Desfasamento das Contas Nacionais.** A âncora assenta num ano com cerca de dois anos de
+5. **Desfasamento das Contas Nacionais.** A âncora assenta num ano com cerca de dois anos de
    desfasamento, atualizado por índice de preços.
-7. **A correspondência COICOP → taxa de IVA é aproximada.** O Código do IVA classifica por
+6. **A correspondência COICOP → taxa de IVA é aproximada.** O Código do IVA classifica por
    produto (Lista I), não por classe COICOP.
-8. **A repercussão é uma hipótese.** Qualquer resultado do simulador é condicional a esse
+7. **A repercussão é uma hipótese.** Qualquer resultado do simulador é condicional a esse
    parâmetro e deve ser apresentado como intervalo.
-9. **Preço de prateleira não é preço pago.** Descontos de cartão e de talão não são
-   integralmente captados.
-10. **A extrapolação agregada é ilustrativa.** Não é uma estimativa de custo orçamental.
-    """)
+8. **A extrapolação agregada é ilustrativa.** Não é uma estimativa de custo orçamental.
+        """)
+        st.warning("""
+**9 · O preço usado não é o preço que uma família concreta paga.** Há duas razões distintas,
+e ambas devem ser declaradas:
 
-    st.warning("""
+**Dispersão entre operadores.** O índice é uma **média nacional ponderada** de uma amostra de
+estabelecimentos — grande distribuição, comércio tradicional, canais especializados —, com
+peso atribuído a cada canal e região segundo o consumo real. Mas os operadores praticam preços
+muito diferentes entre si: quem compre sempre em *discount* enfrenta níveis abaixo desta
+média; quem viva em zona de baixa densidade, acima. O índice capta bem a **variação**; o
+**nível** de cada família oscila em torno dele, e essa dispersão não é visível aqui.
+
+**Preço de prateleira e preço pago.** Mesmo dentro do mesmo estabelecimento, descontos de
+cartão de fidelização e de talão não são integralmente captados na recolha. O preço exposto
+não é o preço efetivamente pago, e o desvio entre ambos varia no tempo e entre insígnias.
+
+Só dados de transação — e-fatura ou *scanner data* — permitiriam medir o preço realmente pago
+e a sua dispersão entre operadores e territórios.
+        """)
+        st.warning("""
 **Ressalva a confirmar nos metadados.** Os ponderadores do IHPC referem-se ao consumo *no
 território* (inclui despesa de não residentes), enquanto a despesa das Contas Nacionais usada
 como âncora pode estar em conceito nacional (residentes). Em Portugal, dado o peso do turismo,
 a diferença não é trivial. Não afeta as variações, mas afeta o **nível** da âncora.
-    """)
+        """)
 
-    st.markdown("#### Base legal e documentação")
-    st.markdown("""
+    with st.expander("📖 Base legal e documentação"):
+        st.markdown("""
+**Quadro legal do índice**
+
 - [Regulamento (UE) 2016/792](https://eur-lex.europa.eu/legal-content/PT/TXT/?uri=CELEX%3A32016R0792) — quadro legal do IHPC
 - Regulamento de Execução (UE) 2020/1148 — especificações metodológicas e técnicas
+- Regulamento (CE) n.º 1445/2007 — regras comuns das Paridades de Poder de Compra
+
+**Documentação metodológica**
+
 - [Eurostat — HICP methodology](https://ec.europa.eu/eurostat/statistics-explained/index.php/HICP_methodology)
 - [Metadados do IHPC](https://ec.europa.eu/eurostat/cache/metadata/en/prc_hicp_esms.htm)
-- [Eurostat — Derivação dos ponderadores](https://ec.europa.eu/eurostat/documents/10186/10693286/Derivation-of-HICP-weights-for-2022.pdf)
-    """)
+- [Derivação dos ponderadores do IHPC](https://ec.europa.eu/eurostat/documents/10186/10693286/Derivation-of-HICP-weights-for-2022.pdf)
+- [Metadados das Paridades de Poder de Compra](https://ec.europa.eu/eurostat/cache/metadata/en/prc_ppp_esms.htm)
+- [Níveis comparativos de preços — Statistics Explained](https://ec.europa.eu/eurostat/statistics-explained/index.php?title=Comparative_price_levels_of_consumer_goods_and_services)
+
+**Classificação**
+
+- COICOP — Divisão de Estatística das Nações Unidas
+- ECOICOP — versão europeia, obrigatória por regulamento
+
+**Fontes nacionais**
+
+- [INE](https://www.ine.pt) — Índice de Preços no Consumidor, Censos 2021, Inquérito às Despesas das Famílias
+        """)
 
 st.divider()
 st.caption(RODAPE)
