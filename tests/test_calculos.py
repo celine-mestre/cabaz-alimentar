@@ -89,3 +89,31 @@ def test_receita_perdida_e_independente_da_repercussao():
         sim = simular_iva(_uma_classe(106.0, 6), {"CP0111": 6}, {"CP0111": 0}, rho)
         perdas.append(resumo_iva(sim, 106.0, 52, 1)["receita_cabaz"])
     assert all(p == pytest.approx(-6.0) for p in perdas)
+
+
+# --------------------------------- inversão do efeito da escala
+def test_efeito_da_escala_inverte_na_dimensao_media():
+    """
+    Como a escala é aplicada ao agregado em análise e ao agregado médio de
+    referência, o efeito de trocar de escala inverte-se conforme o agregado seja
+    menor ou maior do que a média nacional. Não é um erro: é o que qualquer
+    normalização por escala de equivalência produz.
+    """
+    from src.calculos import despesa_do_agregado
+
+    media, dim = 665.70, 2.5
+
+    # agregado MENOR do que a média: coeficientes menores dão valor MAIOR
+    casal_orig = despesa_do_agregado(media, dim, 2, 0, "ocde_original")
+    casal_modi = despesa_do_agregado(media, dim, 2, 0, "ocde_modificada")
+    assert casal_modi > casal_orig
+
+    # agregado MAIOR do que a média: coeficientes menores dão valor MENOR
+    familia_orig = despesa_do_agregado(media, dim, 2, 3, "ocde_original")
+    familia_modi = despesa_do_agregado(media, dim, 2, 3, "ocde_modificada")
+    assert familia_modi < familia_orig
+
+    # o valor é sempre crescente no número de pessoas, seja qual for a escala
+    for escala in ("per_capita", "ocde_original", "ocde_modificada"):
+        serie = [despesa_do_agregado(media, dim, 1, c, escala) for c in range(0, 5)]
+        assert serie == sorted(serie)

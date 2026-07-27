@@ -20,6 +20,7 @@ from src.calculos import (ESCALAS, decompor, despesa_do_agregado, intervalo_agre
                           resumo_decomposicao, resumo_iva, simular_iva,
                           unidades_equivalentes)
 from src.config import (AGREGADOS_ANO, AGREGADOS_CENSOS, AGREGADOS_FONTE,
+                        DIMENSAO_RECUO, DIMENSAO_RECUO_FONTE,
                         AZUL, CLASSES, CODIGOS, COICOP_ALIMENTAR, DOURADO,
                         PAISES, PAISES_POR_DEFEITO, POR_CODIGO, RODAPE,
                         UNIDADE, VERDE, VERMELHO, euro, mes_pt, percentagem)
@@ -144,6 +145,23 @@ def carregar_dados(anos_historico: int = 6):
         agr_df, via6 = pd.DataFrame(), f"indisponível ({exc})"
         registo.append(("N.º de agregados familiares", via6, 0))
 
+    # Nível de preços comparado — a codificação das categorias das PPP não é a
+    # mesma do índice de preços, pelo que se tentam várias e se usa a primeira
+    # que responda. Se nenhuma responder, o painel respetivo não é apresentado.
+    pli_df, pli_cat = pd.DataFrame(), None
+    for candidato in eurostat.PPP_CANDIDATOS_ALIMENTOS:
+        try:
+            tentativa, via7 = eurostat.nivel_precos(
+                list(PAISES.keys()), candidato, ano - 4)
+            if not tentativa.empty:
+                pli_df, pli_cat = tentativa, candidato
+                registo.append((f"Nível de preços ({candidato})", via7, len(tentativa)))
+                break
+        except Exception:                                      # noqa: BLE001
+            continue
+    if pli_df.empty:
+        registo.append(("Nível de preços comparado", "indisponível", 0))
+
     # --- ponderadores: ano mais recente de cada classe ---
     pesos_df = pesos_df.sort_values("time")
     pesos = pesos_df.groupby("coicop")["valor"].last().to_dict()
@@ -176,7 +194,8 @@ def carregar_dados(anos_historico: int = 6):
     var_pt = var_df[(var_df["geo"] == "PT") &
                     (var_df["coicop"] == COICOP_ALIMENTAR)].sort_values("time")
 
-    # --- comparação europeia ---
+    # --- comparação europeia: todos os grupos, todos os países ---
+    bench_todos = var_df.sort_values("time")
     bench = var_df[var_df["coicop"] == COICOP_ALIMENTAR].sort_values("time")
 
     # --- âncora oficial: despesa alimentar por agregado ---
@@ -209,6 +228,8 @@ def carregar_dados(anos_historico: int = 6):
         dimensao_ano, dimensao_media = str(rec["time"]), float(rec["valor"])
 
     return {
+        "pli": pli_df,
+        "pli_cat": pli_cat,
         "agregados_valor": agregados_valor,
         "agregados_ano": agregados_ano,
         "agregados_fonte": agregados_fonte,
@@ -224,6 +245,7 @@ def carregar_dados(anos_historico: int = 6):
         "indice_pt": indice_pt,
         "var_pt": var_pt,
         "bench": bench,
+        "bench_todos": bench_todos,
         "registo": registo,
         "momento": datetime.now(),
     }
@@ -479,7 +501,7 @@ with st.sidebar:
     adultos = ca.number_input("Adultos", min_value=1, max_value=8, value=2, step=1)
     criancas = cb.number_input("Crianças (<14)", min_value=0, max_value=8, value=0, step=1)
 
-    dim_efetiva = dim_media if dim_media else 2.5
+    dim_efetiva = dim_media if dim_media else DIMENSAO_RECUO
     escala_chave = st.selectbox(
         "Escala de equivalência", options=list(ESCALAS.keys()), index=1,
         format_func=lambda k: ESCALAS[k]["nome"],
@@ -501,10 +523,49 @@ with st.sidebar:
 
     st.divider()
     st.metric(f"Despesa mensal — {composicao}", euro(valor_cabaz))
-    st.caption(
-        f"{pessoas} pessoa{'s' if pessoas > 1 else ''} · intervalo entre escalas de "
-        f"{euro(faixa['minimo'])} a {euro(faixa['maximo'])}"
-    )
+    st.caption(f"{pessoas} pessoa{'s' if pessoas > 1 else ''} · "
+               f"intervalo entre escalas de {euro(faixa['minimo'])} a {euro(faixa['maximo'])}")
+
+    with st.expander("Comparar as três escalas"):
+        maior_que_media = pessoas > dim_efetiva
+        st.dataframe(
+            pd.DataFrame([
+                {"Escala": ESCALAS[k]["nome"].split(" (")[0],
+                 "Coeficientes": f"{ESCALAS[k]['primeiro']:.0f} / "
+                                 f"{ESCALAS[k]['adulto']:.1f} / "
+                                 f"{ESCALAS[k]['crianca']:.1f}".replace(".", ","),
+                 "Despesa (€)": round(faixa["por_escala"][k], 2)}
+                for k in ESCALAS
+            ]), use_container_width=True, hide_index=True)
+
+        st.markdown(f"""
+**Porque é que a escala com coeficientes menores dá aqui um valor {'menor' if maior_que_media else 'maior'}?**
+
+O ponto de partida é sempre o **agregado médio português — {('%.2f' % dim_efetiva).replace('.', ',')} pessoas**.
+A escala não serve para calcular a despesa a partir do zero: serve para **ajustar** desse
+agregado médio para o seu. E é aplicada aos **dois lados** do cálculo — ao seu agregado e ao
+agregado médio que serve de referência.
+
+Daí resulta um comportamento que à primeira vista surpreende:
+
+| O seu agregado | Escala com economias de escala mais fortes dá… |
+|---|---|
+| **Menor** que {('%.2f' % dim_efetiva).replace('.', ',')} pessoas | valor **mais alto** |
+| **Maior** que {('%.2f' % dim_efetiva).replace('.', ',')} pessoas | valor **mais baixo** |
+
+A razão: coeficientes menores significam que **cada pessoa a mais custa menos**. Isso
+comprime as diferenças entre agregados de dimensão diferente — todos se aproximam da média.
+Um casal, sendo **menor** que a média, aproxima-se dela *por cima*; um casal com três filhos,
+sendo **maior**, aproxima-se dela *por baixo*.
+
+O ponto de viragem é exatamente a dimensão média. Com {pessoas} pessoa{'s' if pessoas > 1 else ''},
+está **{'acima' if maior_que_media else 'abaixo'}** dela.
+        """)
+        st.caption(
+            "É por isto que a aplicação apresenta sempre um intervalo: nenhuma das três escalas "
+            "é a resposta certa para a alimentação, e a escolha entre elas altera o resultado "
+            "em sentidos diferentes consoante a dimensão do agregado."
+        )
 
     _agr_txt = f"{agregados:,}".replace(",", "\u00a0")
     _mes_txt = mes_pt(ancora["mes"]) if ancora["mes"] else "—"
@@ -562,6 +623,14 @@ with aba1:
                               euro(maior["contributo"]),
                               percentagem(maior["variacao"]))
     colunas[4].metric("Equivalente anual", euro(valor_cabaz * vezes_ano))
+
+    dim_txt = ('%.1f' % dim_efetiva).replace('.', ',')
+    st.caption(
+        f"Para referência, o **agregado médio português — {dim_txt} pessoas** — gasta "
+        f"**{euro(valor_medio_agregado)}** por mês em alimentação "
+        f"({euro(valor_medio_agregado * 12)} por ano). "
+        f"O valor acima está ajustado para {composicao}."
+    )
 
     st.info("""
 **Como ler os cartões.** O valor grande é quanto da despesa mensal vai para esse grupo.
@@ -625,7 +694,7 @@ As fórmulas completas estão no separador **Metodologia**.
         comps = [(1, 0, "1 adulto"), (2, 0, "Casal"), (1, 1, "Monoparental + 1"),
                  (1, 2, "Monoparental + 2"), (2, 1, "Casal + 1 criança"),
                  (2, 2, "Casal + 2 crianças"), (2, 3, "Casal + 3 crianças")]
-        dm = dados.get("dimensao_media") or 2.5
+        dm = dados.get("dimensao_media") or DIMENSAO_RECUO
         linhas_c = []
         for a, c, rot in comps:
             iv = intervalo_agregado(valor_medio_agregado, dm, a, c)
@@ -684,26 +753,55 @@ A **variação homóloga** (linha vermelha) é derivada do índice: compara cada
 mês do ano anterior.
     """)
 
-    meses = st.radio("Período", [12, 24, 36, 60], index=1, horizontal=True,
-                     format_func=lambda m: f"{m} meses" if m < 60 else "5 anos")
-
     if dados["indice_pt"].empty:
         st.info("Sem série de índices disponível.")
+        periodos, inicio_sel, fim_sel = [], None, None
     else:
+        periodos = sorted(dados["indice_pt"]["time"].unique())
+        pre = periodos[-25] if len(periodos) > 25 else periodos[0]
+        inicio_sel, fim_sel = st.select_slider(
+            "Intervalo a apresentar",
+            options=periodos, value=(pre, periodos[-1]),
+            format_func=mes_pt,
+        )
+        st.caption(
+            f"A mostrar de **{mes_pt(inicio_sel)}** a **{mes_pt(fim_sel)}** — "
+            f"{periodos.index(fim_sel) - periodos.index(inicio_sel) + 1} meses. "
+            "Arraste as extremidades para alterar."
+        )
+
+        idx_sel = dados["indice_pt"][
+            (dados["indice_pt"]["time"] >= inicio_sel) &
+            (dados["indice_pt"]["time"] <= fim_sel)]
+        var_sel = dados["var_pt"][
+            (dados["var_pt"]["time"] >= inicio_sel) &
+            (dados["var_pt"]["time"] <= fim_sel)]
+
         st.plotly_chart(
-            grafico_historico(dados["indice_pt"], dados["var_pt"], meses),
+            grafico_historico(idx_sel, var_sel, len(idx_sel)),
             use_container_width=True,
         )
 
+        if len(idx_sel) >= 2:
+            acum = (idx_sel["valor"].iloc[-1] / idx_sel["valor"].iloc[0] - 1) * 100
+            st.info(
+                f"**Variação acumulada no intervalo escolhido: {percentagem(acum)}** — "
+                f"de {mes_pt(inicio_sel)} a {mes_pt(fim_sel)}. "
+                "É frequentemente a leitura mais eloquente: a taxa homóloga de um mês "
+                "isolado diz pouco; o acumulado desde uma data de referência diz muito."
+            )
+
     var_pt = dados["var_pt"]
-    if not var_pt.empty:
-        janela = var_pt.tail(meses)["valor"]
+    if not var_pt.empty and inicio_sel is not None:
+        janela = var_pt[(var_pt["time"] >= inicio_sel) &
+                        (var_pt["time"] <= fim_sel)]["valor"]
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Variação mais recente", percentagem(var_pt["valor"].iloc[-1]),
                   help=f"Mês de referência: {mes_pt(var_pt['time'].iloc[-1])}")
-        c2.metric("Média do período", percentagem(janela.mean()))
-        c3.metric("Máximo do período", percentagem(janela.max()))
-        c4.metric("Mínimo do período", percentagem(janela.min()))
+        if len(janela):
+            c2.metric("Média do intervalo", percentagem(janela.mean()))
+            c3.metric("Máximo do intervalo", percentagem(janela.max()))
+            c4.metric("Mínimo do intervalo", percentagem(janela.min()))
 
     st.caption(
         "Frequência mensal — a mais fina publicada por fonte oficial. Existem séries semanais "
@@ -922,23 +1020,47 @@ Repare ainda num ponto que a simulação torna visível: **a receita que o Estad
 with aba4:
     st.markdown("#### Inflação alimentar comparada (IHPC, variação homóloga)")
 
-    escolhidos = st.multiselect(
-        "Países", options=list(PAISES.keys()),
-        default=[p for p in PAISES_POR_DEFEITO if p in PAISES],
-        format_func=lambda g: PAISES[g],
-    )
+    cpais, cgrupo = st.columns([3, 2])
+    with cpais:
+        escolhidos = st.multiselect(
+            "Países", options=list(PAISES.keys()),
+            default=[p for p in PAISES_POR_DEFEITO if p in PAISES],
+            format_func=lambda g: PAISES[g],
+        )
+    with cgrupo:
+        opcoes_grupo = [COICOP_ALIMENTAR] + CODIGOS
+        rotulos = {COICOP_ALIMENTAR: "🍽️ Todos os alimentos"}
+        rotulos.update({c["cod"]: f"{c['emoji']} {c['nome']}" for c in CLASSES})
+        grupo_sel = st.selectbox(
+            "Grupo de produto", options=opcoes_grupo,
+            format_func=lambda g: rotulos[g],
+            help="Compare a inflação de um tipo de produto específico entre países.",
+        )
 
-    bench = dados["bench"]
-    if not escolhidos or bench.empty:
+    bench_todos = dados["bench_todos"]
+    bench = {}
+    _ts = {}
+    for _, linha_b in bench_todos[bench_todos["coicop"] == grupo_sel].iterrows():
+        bench.setdefault(linha_b["geo"], {})[linha_b["time"]] = linha_b["valor"]
+        _ts[linha_b["time"]] = 1
+    tempos_b = sorted(_ts)
+    if grupo_sel != COICOP_ALIMENTAR:
+        st.caption(
+            f"A comparar **{rotulos[grupo_sel].split(' ', 1)[1]}**. "
+            "Grupos individuais são bastante mais voláteis do que o agregado alimentar — "
+            "a fruta e os legumes, em particular, sofrem efeitos sazonais e climáticos fortes."
+        )
+    if not escolhidos or not tempos_b:
         st.info("Selecione pelo menos um país.")
     else:
         fig = go.Figure()
         paleta = [VERDE, AZUL, DOURADO, VERMELHO, "#7a5ea8", "#c2681a",
                   "#0f8f9c", "#4a7c3f", "#8f4a6b", "#5a6b8f", "#a0568f", "#2980b9"]
         for i, geo in enumerate(escolhidos):
-            serie = bench[bench["geo"] == geo].sort_values("time")
-            if serie.empty:
+            if geo not in bench:
                 continue
+            serie = pd.DataFrame({"time": tempos_b,
+                                  "valor": [bench[geo].get(t) for t in tempos_b]})
             fig.add_trace(go.Scatter(
                 x=[mes_pt(t) for t in serie["time"]], y=serie["valor"],
                 name=PAISES[geo],
@@ -956,8 +1078,11 @@ with aba4:
         st.plotly_chart(fig, use_container_width=True)
 
         # --- ranking do último mês ---
-        ultimo = bench["time"].max()
-        ranking = bench[bench["time"] == ultimo].copy()
+        ultimo = tempos_b[-1]
+        ranking = pd.DataFrame([
+            {"geo": g, "valor": v[ultimo]}
+            for g, v in bench.items() if v.get(ultimo) is not None
+        ])
         ranking["pais"] = ranking["geo"].map(PAISES)
         ranking = ranking.dropna(subset=["pais"]).sort_values("valor", ascending=True)
 
@@ -1034,6 +1159,59 @@ with aba4:
                                      ("Indicador", "Variacao homologa do IHPC, classe CP011")]),
                 f"despesa_alimentar_ue27_{date.today()}.csv", "text/csv",
             )
+
+    # ---------- nível de preços comparado ----------
+    pli = dados.get("pli")
+    if pli is not None and not pli.empty:
+        st.divider()
+        st.markdown("#### E os preços? São mais caros em Portugal?")
+        st.info("""
+A inflação diz o **ritmo a que os preços sobem** — não diz se são altos ou baixos. Para isso
+existe outro indicador: o **índice de nível de preços**, que compara quanto custa o mesmo
+cabaz de bens em cada país, corrigido pelo câmbio, com a média da UE-27 = 100.
+
+Um país pode ter preços **baixos a subir depressa** ou **altos a subir devagar** — e as duas
+situações exigem respostas de política diferentes.
+        """)
+
+        ano_pli = pli["time"].max()
+        pli_ult = pli[pli["time"] == ano_pli].copy()
+        pli_ult["pais"] = pli_ult["geo"].map(PAISES)
+        pli_ult = pli_ult.dropna(subset=["pais"]).sort_values("valor")
+
+        figp = go.Figure(go.Bar(
+            y=pli_ult["pais"], x=pli_ult["valor"], orientation="h",
+            marker_color=[VERDE if g == "PT" else (AZUL if g == "EU27_2020" else "#b7c2ce")
+                          for g in pli_ult["geo"]],
+            text=[f"{v:.0f}".replace(".", ",") for v in pli_ult["valor"]],
+            textposition="outside",
+            hovertemplate="%{y}: %{x:.0f} (UE-27 = 100)<extra></extra>",
+        ))
+        figp.add_vline(x=100, line_width=2, line_dash="dash", line_color="#64748b",
+                       annotation_text="média UE-27", annotation_position="top")
+        figp.update_layout(height=max(300, 32 * len(pli_ult)),
+                           margin=dict(t=42, b=40, l=10, r=60),
+                           xaxis_title="Nível de preços dos alimentos (UE-27 = 100)",
+                           plot_bgcolor="#fff", showlegend=False)
+        figp.update_xaxes(gridcolor="#eef1f4")
+        st.plotly_chart(figp, use_container_width=True)
+
+        pt_pli = pli_ult.loc[pli_ult["geo"] == "PT", "valor"]
+        if not pt_pli.empty:
+            v = float(pt_pli.iloc[0])
+            posicao = ("acima" if v > 100 else "abaixo")
+            dif_txt = f"{abs(v - 100):.0f}".replace(".", ",")
+            idx_txt = f"{v:.0f}".replace(".", ",")
+            st.caption(
+                f"Em {ano_pli}, os alimentos em Portugal custavam **{dif_txt} % {posicao}** "
+                f"da média da UE-27 (índice {idx_txt}). "
+                "Fonte: programa de Paridades de Poder de Compra Eurostat-OCDE "
+                f"(`prc_ppp_ind_1`, categoria `{dados.get('pli_cat')}`). Publicação anual."
+            )
+        st.caption(
+            "Nota: este indicador é **anual** e tem maior desfasamento do que o índice de "
+            "preços mensal. Serve para situar Portugal em nível, não para acompanhar conjuntura."
+        )
 
 # ==========================================================================
 # ABA 5 — Metodologia e fontes
@@ -1134,6 +1312,27 @@ A variação homóloga obtém-se diretamente do índice:
             for k in ESCALAS
         ]), use_container_width=True, hide_index=True)
         st.latex(r"eq(A,C) = 1 + \alpha \cdot (A - 1) + \beta \cdot C")
+
+        st.markdown("""
+**Como a escala é aplicada — e uma propriedade que convém ter presente.**
+
+O ponto de partida é a despesa do agregado médio nacional. A escala não calcula a despesa a
+partir do zero: **ajusta** desse agregado médio para o agregado em análise, e é aplicada aos
+**dois lados** do rácio — ao numerador e ao denominador.
+
+Daqui decorre um comportamento que à primeira vista surpreende: como o denominador também
+depende da escala, **o efeito de mudar de escala inverte-se** conforme o agregado seja maior
+ou menor do que a média nacional.
+
+Coeficientes menores significam que cada pessoa a mais custa menos, o que **comprime as
+diferenças** entre agregados de dimensão diferente. Um agregado menor do que a média
+aproxima-se dela por cima — o valor sobe. Um agregado maior aproxima-se dela por baixo — o
+valor desce. O ponto de viragem é exatamente a dimensão média.
+
+Não é um artefacto do cálculo: é o que qualquer normalização por escala de equivalência
+produz. É também a razão pela qual a aplicação apresenta sempre um intervalo, e não um valor
+único.
+        """)
         st.warning("""
 **Porque não se usa a norma da UE por defeito.** A escala OCDE modificada é a norma europeia
 para o *rendimento*, e foi construída para o consumo total, em que a partilha da habitação gera

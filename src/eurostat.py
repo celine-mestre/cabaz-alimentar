@@ -234,3 +234,28 @@ def numero_agregados(desde_ano: int) -> tuple[pd.DataFrame, str]:
         {"freq": "A", "geo": "PT", "sinceTimePeriod": str(desde_ano)},
         inicio=str(desde_ano),
     )
+
+
+# Categorias analíticas candidatas para o nível de preços dos alimentos.
+# A nomenclatura das PPP não coincide com a COICOP do índice de preços e a
+# codificação mudou com a COICOP 2018, pelo que se tentam várias hipóteses e
+# se usa a primeira que devolva dados.
+PPP_CANDIDATOS_ALIMENTOS = ["A010101", "E011", "CP011", "A01", "0101"]
+
+
+def nivel_precos(geos, categoria: str, desde_ano: int) -> tuple[pd.DataFrame, str]:
+    """
+    Índice de nível de preços (EU27 = 100) — quanto custa o mesmo cabaz de bens
+    em cada país, corrigido pelo câmbio. Responde à pergunta que a inflação não
+    responde: *são mais caros aqui?*
+
+    Fonte: programa de Paridades de Poder de Compra Eurostat-OCDE.
+    """
+    geos = list(geos)
+    return obter(
+        "prc_ppp_ind_1",
+        f"A.PLI_EU27_2020.{categoria}.{'+'.join(geos)}",
+        {"freq": "A", "na_item": "PLI_EU27_2020", "ppp_cat": categoria,
+         "geo": geos, "sinceTimePeriod": str(desde_ano)},
+        inicio=str(desde_ano),
+    )

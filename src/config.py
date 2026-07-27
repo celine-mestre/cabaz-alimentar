@@ -69,6 +69,12 @@ AGREGADOS_CENSOS = 4_149_096
 AGREGADOS_FONTE = "INE, Censos 2021 (resultados definitivos)"
 AGREGADOS_ANO = 2021
 
+# Dimensão média do agregado — apenas usada se o Eurostat não responder.
+# O valor corrente é obtido de ilc_lvph01 (EU-SILC) em cada sessão: está em
+# queda em toda a Europa, pelo que uma constante desatualiza-se depressa.
+DIMENSAO_RECUO = 2.4
+DIMENSAO_RECUO_FONTE = "Eurostat, ilc_lvph01 (EU-SILC), 2025"
+
 # --------------------------------------------------------------------------
 # Metadados institucionais
 # --------------------------------------------------------------------------
