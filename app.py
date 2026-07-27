@@ -163,12 +163,22 @@ def carregar_dados(anos_historico: int = 6):
         registo.append(("Nível de preços comparado", "indisponível", 0))
 
     # Esforço alimentar — coeficiente de Engel (alimentação / consumo total)
+    # Os dois lados do coeficiente de Engel são obtidos em separado: se o
+    # agregado total falhar, a despesa alimentar por país continua disponível.
+    partes_engel = []
     try:
-        engel_df, via8 = eurostat.despesa_total_consumo(list(PAISES.keys()), ano - 5)
-        registo.append(("Consumo total e alimentar (Engel)", via8, len(engel_df)))
+        tot_df, via8a = eurostat.despesa_total_consumo(list(PAISES.keys()), ano - 5)
+        registo.append(("Consumo total das famílias", via8a, len(tot_df)))
+        partes_engel.append(tot_df)
     except Exception as exc:                                   # noqa: BLE001
-        engel_df, via8 = pd.DataFrame(), f"indisponível ({exc})"
-        registo.append(("Consumo total e alimentar (Engel)", via8, 0))
+        registo.append(("Consumo total das famílias", f"indisponível ({exc})", 0))
+    try:
+        ali_df, via8b = eurostat.despesa_alimentar_paises(list(PAISES.keys()), ano - 5)
+        registo.append(("Despesa alimentar por país", via8b, len(ali_df)))
+        partes_engel.append(ali_df)
+    except Exception as exc:                                   # noqa: BLE001
+        registo.append(("Despesa alimentar por país", f"indisponível ({exc})", 0))
+    engel_df = pd.concat(partes_engel, ignore_index=True) if len(partes_engel) == 2 else pd.DataFrame()
 
     try:
         sm_df, via9 = eurostat.salario_minimo(list(PAISES.keys()), ano - 3)
@@ -247,7 +257,7 @@ def carregar_dados(anos_historico: int = 6):
     if not engel_df.empty:
         for geo in engel_df["geo"].unique():
             sub = engel_df[engel_df["geo"] == geo]
-            tot = sub[sub["coicop"] == "CP00"].sort_values("time")
+            tot = sub[sub["coicop"] == "TOTAL"].sort_values("time")
             ali = sub[sub["coicop"] == "CP011"].sort_values("time")
             if tot.empty or ali.empty:
                 continue
@@ -1157,8 +1167,11 @@ with aba4:
         engel = dados.get("engel") or {}
         if not engel:
             st.warning(
-                "O indicador de esforço não está disponível nesta sessão. "
-                "Consulte o registo de ligações no separador Metodologia."
+                "**O indicador de esforço não está disponível nesta sessão.**\n\n"
+                "O cálculo precisa de dois valores das Contas Nacionais — a despesa "
+                "alimentar e o consumo total das famílias. O separador **Metodologia**, "
+                "no bloco «Registo das ligações desta sessão», mostra qual dos dois "
+                "falhou e porquê."
             )
         else:
             st.markdown("""

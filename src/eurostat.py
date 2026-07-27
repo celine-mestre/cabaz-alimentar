@@ -261,19 +261,50 @@ def nivel_precos(geos, categoria: str, desde_ano: int) -> tuple[pd.DataFrame, st
     )
 
 
+# O código do agregado total varia consoante a versão do conjunto.
+TOTAL_CANDIDATOS = ["TOTAL", "CP00", "P31_S14", "CP_TOT"]
+
+
 def despesa_total_consumo(geos, desde_ano: int) -> tuple[pd.DataFrame, str]:
     """
-    Despesa final das famílias — total (CP00) e alimentação (CP011) — por país.
+    Despesa final total das famílias (todos os fins), por país.
 
-    O rácio entre as duas é o **coeficiente de Engel**: a fração do consumo das
-    famílias que vai para alimentação. É o indicador clássico de esforço
-    alimentar, e é diretamente comparável entre países.
+    Combinada com a despesa alimentar (CP011), dá o **coeficiente de Engel**:
+    a fração do consumo das famílias que vai para alimentação.
+
+    O código do agregado total não é o mesmo em todas as versões do conjunto,
+    pelo que se tentam vários e se usa o primeiro que responda.
     """
+    geos = list(geos)
+    ultimo = None
+    for cod in TOTAL_CANDIDATOS:
+        try:
+            df, via = obter(
+                "nama_10_co3_p3",
+                f"A.CP_MEUR.{cod}.{'+'.join(geos)}",
+                {"freq": "A", "unit": "CP_MEUR", "coicop": cod,
+                 "geo": geos, "sinceTimePeriod": str(desde_ano)},
+                inicio=str(desde_ano),
+            )
+            if not df.empty:
+                df = df.copy()
+                df["coicop"] = "TOTAL"
+                return df, f"{via} (código {cod})"
+        except Exception as exc:                             # noqa: BLE001
+            ultimo = exc
+            continue
+    raise ErroEurostat(
+        f"nama_10_co3_p3 — nenhum código de total respondeu "
+        f"({', '.join(TOTAL_CANDIDATOS)}): {ultimo}")
+
+
+def despesa_alimentar_paises(geos, desde_ano: int) -> tuple[pd.DataFrame, str]:
+    """Despesa alimentar (CP011) por país — o numerador do coeficiente de Engel."""
     geos = list(geos)
     return obter(
         "nama_10_co3_p3",
-        f"A.CP_MEUR.CP00+CP011.{'+'.join(geos)}",
-        {"freq": "A", "unit": "CP_MEUR", "coicop": ["CP00", "CP011"],
+        f"A.CP_MEUR.CP011.{'+'.join(geos)}",
+        {"freq": "A", "unit": "CP_MEUR", "coicop": "CP011",
          "geo": geos, "sinceTimePeriod": str(desde_ano)},
         inicio=str(desde_ano),
     )
