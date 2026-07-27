@@ -1,4 +1,12 @@
-streamlit>=1.40
-pandas>=2.2
-plotly>=5.24
-requests>=2.32
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+.DS_Store
+.streamlit/secrets.toml
+*.csv
+!tests/dados_exemplo/*.csv
+.pytest_cache/
+.ipynb_checkpoints/
