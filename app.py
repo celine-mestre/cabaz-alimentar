@@ -43,8 +43,6 @@ st.set_page_config(
 # ==========================================================================
 st.markdown(f"""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700&display=swap');
-  html, body, [class*="css"] {{ font-family: 'Lexend', Arial, sans-serif; }}
 
   .barra {{
     display: flex; align-items: center; gap: 11px;
@@ -187,6 +185,26 @@ def carregar_dados(anos_historico: int = 6):
         sm_df, via9 = pd.DataFrame(), f"indisponível ({exc})"
         registo.append(("Salário mínimo nacional", via9, 0))
 
+    # Rendimento das famílias: média e mediana. A média é a coerente com a
+    # despesa (que também é uma média); a mediana fica disponível para
+    # caracterizar o agregado do meio da distribuição.
+    try:
+        sme_df, via11 = eurostat.salario_medio(list(PAISES.keys()), ano - 4)
+        registo.append(("Salário médio líquido", via11, len(sme_df)))
+    except Exception as exc:                                   # noqa: BLE001
+        sme_df, via11 = pd.DataFrame(), f"indisponível ({exc})"
+        registo.append(("Salário médio líquido", via11, 0))
+
+    rend_por_tipo = {}
+    for indic, nome_indic in [("MEI_E", "médio"), ("MED_E", "mediano")]:
+        try:
+            df_r, via_r = eurostat.rendimento(list(PAISES.keys()), ano - 4, indic)
+            registo.append((f"Rendimento {nome_indic} equivalente", via_r, len(df_r)))
+            rend_por_tipo[indic] = df_r
+        except Exception as exc:                               # noqa: BLE001
+            registo.append((f"Rendimento {nome_indic} equivalente",
+                            f"indisponível ({exc})", 0))
+
     # --- ponderadores: ano mais recente de cada classe ---
     pesos_df = pesos_df.sort_values("time")
     pesos = pesos_df.groupby("coicop")["valor"].last().to_dict()
@@ -271,6 +289,23 @@ def carregar_dados(anos_historico: int = 6):
                 engel[geo] = {"ano": a, "quota": f / t * 100,
                               "total": t, "alimentar": f}
 
+    rendimento = {}
+    for indic, df_r in rend_por_tipo.items():
+        rendimento[indic] = {}
+        for geo in df_r["geo"].unique():
+            sub = df_r[df_r["geo"] == geo].sort_values("time")
+            if not sub.empty:
+                rendimento[indic][geo] = {"ano": str(sub["time"].iloc[-1]),
+                                          "valor": float(sub["valor"].iloc[-1])}
+
+    salario_med = {}
+    if not sme_df.empty:
+        for geo in sme_df["geo"].unique():
+            sub = sme_df[sme_df["geo"] == geo].sort_values("time")
+            if not sub.empty:
+                salario_med[geo] = {"ano": str(sub["time"].iloc[-1]),
+                                    "valor": float(sub["valor"].iloc[-1])}
+
     salario = {}
     if not sm_df.empty:
         for geo in sm_df["geo"].unique():
@@ -281,7 +316,9 @@ def carregar_dados(anos_historico: int = 6):
 
     return {
         "engel": engel,
+        "rendimento": rendimento,
         "salario": salario,
+        "salario_medio": salario_med,
         "pli": pli_df,
         "pli_cat": pli_cat,
         "agregados_valor": agregados_valor,
@@ -690,7 +727,7 @@ with aba1:
     r2.metric("Equivalente anual", euro(valor_medio_agregado * 12))
     eng_pt = (dados.get("engel") or {}).get("PT")
     if eng_pt:
-        r3.metric("Fatia do consumo das famílias em alimentação",
+        r3.metric("Do que as famílias gastam, vai para comida",
                   f"{eng_pt['quota']:.1f} %".replace(".", ","),
                   help=(f"Coeficiente de Engel, {eng_pt['ano']}. Quanto do consumo total "
                         "das famílias portuguesas vai para comida. Comparação europeia "
@@ -1176,11 +1213,28 @@ with aba4:
         else:
             st.markdown("""
 **O coeficiente de Engel.** É a fração do consumo total das famílias que vai para alimentação.
-Chama-se assim por **Ernst Engel**, o estatístico que em 1857 formulou a regularidade que
-ainda hoje se verifica: *quanto menor o rendimento, maior a fatia do orçamento gasta em comida*.
+Chama-se assim por **Ernst Engel**, o estatístico que em 1857 formulou a regularidade que ainda
+hoje se verifica: *quanto menor o rendimento, maior a fatia do orçamento gasta em comida*.
 
-É, por isso, um dos indicadores mais antigos e mais robustos de bem-estar económico — e
-comparável entre países sem necessidade de conversão cambial, por ser um rácio.
+É um dos indicadores mais antigos e mais robustos de bem-estar económico — e comparável entre
+países sem conversão cambial, por ser um rácio.
+            """)
+            st.warning("""
+**Atenção: este número não tem salários no denominador.**
+
+O coeficiente de Engel é **despesa sobre despesa** — não despesa sobre rendimento:
+
+| | Numerador | Denominador |
+|---|---|---|
+| **Coeficiente de Engel** (aqui) | O que as famílias gastam em **comida** | O que as famílias gastam em **tudo** |
+| **Esforço alimentar** (bloco seguinte) | O que o agregado gasta em **comida** | O que o agregado **recebe** |
+
+Por isso os dois números são diferentes e não se substituem. Este mede **como se reparte o
+orçamento de consumo**; o seguinte mede **quanto do rendimento é absorvido pela comida**.
+
+E também por isso **este indicador não responde à composição do agregado** que escolheu na
+barra lateral: é um rácio macroeconómico nacional — a despesa alimentar de *todas* as famílias
+sobre o consumo total de *todas* elas. Não existe versão «por agregado» nas Contas Nacionais.
             """)
 
             linhas_e = []
@@ -1195,9 +1249,11 @@ comparável entre países sem necessidade de conversão cambial, por ser um rác
             ue_e = engel.get("EU27_2020")
             if pt_e:
                 e1, e2, e3 = st.columns(3)
-                e1.metric(f"Portugal em {pt_e['ano']}",
+                e1.metric(f"Portugal ({pt_e['ano']}) — do que gastam",
                           f"{pt_e['quota']:.1f} %".replace(".", ","),
-                          help="Fração do consumo das famílias que vai para alimentação")
+                          help=("De cada 100 € que as famílias portuguesas gastam em tudo "
+                                "— casa, transportes, saúde, lazer —, esta fração vai para "
+                                "alimentação. Não envolve salários nem rendimentos."))
                 if ue_e:
                     dif = pt_e["quota"] - ue_e["quota"]
                     dif_txt = f"{dif:+.1f}".replace(".", ",") + " p.p."
@@ -1231,26 +1287,145 @@ comparável entre países sem necessidade de conversão cambial, por ser um rác
                 "Fonte: Contas Nacionais (`nama_10_co3_p3`), rácio CP011/CP00. Publicação anual."
             )
 
-            # ---- esforço face ao salário mínimo ----
-            salario = dados.get("salario") or {}
-            sm_pt = salario.get("PT")
-            if sm_pt and valor_medio_agregado:
-                st.divider()
-                st.markdown("#### E face ao salário mínimo?")
-                quota_sm = valor_medio_agregado / sm_pt["valor"] * 100
-                s1, s2, s3 = st.columns(3)
-                s1.metric(f"Salário mínimo ({sm_pt['periodo']})", euro(sm_pt["valor"]))
-                s2.metric("Despesa alimentar do agregado médio", euro(valor_medio_agregado))
-                s3.metric("Fatia do salário mínimo",
-                          f"{quota_sm:.0f} %".replace(".", ","))
-                st.warning(
-                    "**Leitura com cautela.** Este rácio compara a despesa alimentar de um "
-                    "agregado **médio** com **um** salário mínimo. A maioria dos agregados tem "
-                    "mais do que um rendimento, e nem todos os rendimentos são o salário mínimo. "
-                    "Serve para dimensionar o esforço no limite inferior da distribuição, não "
-                    "para caracterizar o agregado típico. Uma medida rigorosa exigiria a "
-                    "distribuição de rendimentos por agregado — via IDEF ou EU-SILC."
+            # ---- esforço do agregado escolhido ----
+            st.divider()
+            st.markdown(f"#### Quanto pesa no orçamento — {composicao}")
+
+            rendimentos = dados.get("rendimento") or {}
+            sm_pt = (dados.get("salario") or {}).get("PT")
+            sme_pt = (dados.get("salario_medio") or {}).get("PT")
+            tem_rend = any(rendimentos.get(k, {}).get("PT") for k in ("MEI_E", "MED_E"))
+
+            if not tem_rend and not sm_pt and not sme_pt:
+                st.info(
+                    "Os indicadores de rendimento não estão disponíveis nesta sessão. "
+                    "Consulte o registo de ligações no separador Metodologia."
                 )
+            else:
+                ca_, cb_ = st.columns([1, 2])
+                with ca_:
+                    trabalhadores = st.number_input(
+                        "Adultos com rendimento", min_value=1, max_value=int(adultos),
+                        value=int(adultos), step=1,
+                        help=("Quantos dos adultos do agregado auferem rendimento. "
+                              "As crianças não entram nesta contagem."),
+                    )
+                with cb_:
+                    st.markdown(
+                        f"<div style='padding-top:26px;font-size:12.5px;color:#4a4a48'>"
+                        f"Agregado de <strong>{pessoas} pessoa{'s' if pessoas > 1 else ''}</strong>"
+                        + (f", dos quais {criancas} com menos de 14 anos, que não "
+                           f"{'auferem' if criancas > 1 else 'aufere'} rendimento" if criancas else "")
+                        + f". <strong>{trabalhadores}</strong> "
+                        + ("auferem" if trabalhadores > 1 else "aufere")
+                        + " rendimento. Despesa alimentar mensal: "
+                        + f"<strong>{euro(valor_cabaz)}</strong>.</div>",
+                        unsafe_allow_html=True)
+
+                # --- construir as referências disponíveis ---
+                refs = []
+                indic_r = None
+                if tem_rend:
+                    disponiveis = [k for k in ("MEI_E", "MED_E")
+                                   if rendimentos.get(k, {}).get("PT")]
+                    indic_r = "MEI_E" if "MEI_E" in disponiveis else disponiveis[0]
+                    r = rendimentos[indic_r]["PT"]
+                    ue_ocde = unidades_equivalentes(adultos, criancas, "ocde_modificada")
+                    refs.append({
+                        "ref": "Rendimento das famílias (EU-SILC)",
+                        "detalhe": (f"{'Médio' if indic_r == 'MEI_E' else 'Mediano'} equivalente "
+                                    f"{r['ano']} × {('%.2f' % ue_ocde).replace('.', ',')} unidades"),
+                        "mensal": r["valor"] * ue_ocde / 12,
+                        "natureza": "líquido",
+                    })
+                if sme_pt:
+                    refs.append({
+                        "ref": f"{trabalhadores} × salário médio",
+                        "detalhe": f"Trabalhador médio, líquido, {sme_pt['ano']}",
+                        "mensal": sme_pt["valor"] * trabalhadores / 12,
+                        "natureza": "líquido",
+                    })
+                if sm_pt:
+                    refs.append({
+                        "ref": f"{trabalhadores} × salário mínimo",
+                        "detalhe": f"Valor legal bruto, {sm_pt['periodo']}",
+                        "mensal": sm_pt["valor"] * trabalhadores,
+                        "natureza": "bruto",
+                    })
+
+                for r in refs:
+                    r["esforco"] = valor_cabaz / r["mensal"] * 100 if r["mensal"] else None
+
+                tab_r = pd.DataFrame([{
+                    "Referência": r["ref"],
+                    "Rendimento mensal": euro(r["mensal"]),
+                    "Esforço alimentar": (f"{r['esforco']:.1f} %".replace(".", ",")
+                                          if r["esforco"] is not None else "—"),
+                    "Natureza": r["natureza"],
+                    "Detalhe": r["detalhe"],
+                } for r in refs])
+                st.dataframe(tab_r, use_container_width=True, hide_index=True)
+
+                figR = go.Figure(go.Bar(
+                    y=[r["ref"] for r in refs],
+                    x=[r["esforco"] for r in refs], orientation="h",
+                    marker_color=[VERDE if r["natureza"] == "líquido" else DOURADO
+                                  for r in refs],
+                    text=[f"{r['esforco']:.1f} %".replace(".", ",") for r in refs],
+                    textposition="outside",
+                    hovertemplate="%{y}: %{x:.1f} % do rendimento<extra></extra>"))
+                figR.update_layout(height=max(200, 60 * len(refs)),
+                                   margin=dict(t=20, b=40, l=10, r=70),
+                                   xaxis_title="Fatia do rendimento absorvida pela alimentação (%)",
+                                   plot_bgcolor="#fff", showlegend=False)
+                figR.update_xaxes(gridcolor="#eef1f4")
+                st.plotly_chart(figR, use_container_width=True)
+
+                st.caption(
+                    "**Verde:** rendimento líquido — depois de impostos e contribuições. "
+                    "**Dourado:** salário mínimo, que é um valor **bruto legal** e por isso "
+                    "sobrestima o rendimento efetivamente disponível. Os dois não são "
+                    "diretamente comparáveis entre si."
+                )
+
+                with st.expander("⚠️ O que estes cálculos assumem — leitura obrigatória"):
+                    st.markdown(f"""
+**1 · As crianças não auferem rendimento.** O número de salários multiplica-se pelos
+**adultos com rendimento** indicados acima, nunca pelo total de pessoas. Um casal com dois
+filhos e dois salários continua a ter dois salários — mas quatro pessoas a alimentar, e é
+essa assimetria que faz o esforço subir.
+
+**2 · Bruto e líquido não se misturam.** O salário mínimo é um valor legal **bruto**: não
+desconta contribuições nem imposto, nem inclui prestações familiares. O rendimento do EU-SILC
+e o salário médio são **líquidos**. Comparar diretamente os dois esforços sobrestima o
+rendimento disponível de quem aufere o mínimo.
+
+**3 · O agregado está num valor central da distribuição.** Agregados abaixo dele têm esforço
+**superior** ao apresentado — e é justamente aí que a pressão alimentar mais se faz sentir.
+Uma medida por escalão de rendimento exigiria o IDEF/INE ou microdados do EU-SILC.
+
+**4 · Numerador e denominador usam escalas diferentes.** A despesa alimentar é ajustada pela
+escala que escolheu na barra lateral (**{ESCALAS[escala_chave]["nome"].split(" (")[0]}**); o
+rendimento do EU-SILC tem de usar a **OCDE modificada**, que é a que esse inquérito aplica.
+A consequência é mensurável:
+
+| Escala usada na despesa | 1 adulto | Casal | Casal + 2 |
+|---|---|---|---|
+| OCDE modificada (igual à do rendimento) | 25,9 % | 25,9 % | 25,9 % |
+| OCDE original | 22,3 % | 25,2 % | 28,6 % |
+| Per capita | 18,4 % | 24,5 % | 35,0 % |
+
+*(valores ilustrativos, com dados de referência)*
+
+Se as duas escalas coincidirem, **o esforço é constante** seja qual for a composição — ambos
+os lados escalam de forma idêntica. A subida com o número de pessoas resulta, portanto, da
+**diferença entre as escalas**. Isso não invalida a leitura, porque a alimentação tem
+economias de escala genuinamente mais fracas do que o consumo total; mas a **magnitude**
+depende da escala escolhida.
+
+**Como usar:** leia a **direção** como robusta e o **valor exato** como condicional. Teste
+sempre a sensibilidade mudando a escala na barra lateral.
+                    """)
 
             with st.expander("Descarregar dados do esforço"):
                 tab_e = df_e[["pais", "quota", "ano"]].copy()

@@ -20,9 +20,10 @@ comparar Portugal com os restantes Estados-Membros.
 6. [Alojamento no Streamlit Community Cloud](#alojamento-no-streamlit-community-cloud)
 7. [Fontes de dados](#fontes-de-dados)
 8. [Metodologia](#metodologia)
-9. [Limitações a declarar](#limitações-a-declarar)
-10. [Manutenção](#manutenção)
-11. [Resolução de problemas](#resolução-de-problemas)
+9. [Indicadores de esforço](#indicadores-de-esforço)
+10. [Limitações a declarar](#limitações-a-declarar)
+11. [Manutenção](#manutenção)
+12. [Resolução de problemas](#resolução-de-problemas)
 
 ---
 
@@ -91,7 +92,7 @@ cabaz-alimentar/
 │   ├── eurostat.py         # acesso aos dados (duas vias independentes)
 │   └── calculos.py         # decomposição do cabaz e simulação de IVA
 └── tests/
-    └── test_calculos.py    # 11 testes dos cálculos analíticos
+    └── test_calculos.py    # 13 testes dos cálculos analíticos
 ```
 
 A separação entre **acesso a dados** (`eurostat.py`), **cálculo** (`calculos.py`)
@@ -200,15 +201,25 @@ Todos os dados quantitativos provêm do **Eurostat**, que difunde o índice
 harmonizado de preços no consumidor (IHPC) compilado pelos institutos nacionais
 — no caso português, o **INE**.
 
-| Elemento | Conjunto de dados | Frequência |
-|---|---|---|
-| Despesa alimentar (âncora em euros) | `nama_10_co3_p3` | Anual |
-| Dimensão média do agregado | `ilc_lvph01` | Anual |
-| Número de agregados familiares | `lfst_hhnhtych` (recuo: Censos 2021) | Anual |
-| Ponderadores por classe | `prc_hicp_inw` | Anual |
-| Índice de preços | `prc_hicp_midx` | Mensal |
-| Variação homóloga | `prc_hicp_manr` | Mensal |
-| Comparação UE-27 | `prc_hicp_manr` | Mensal |
+| Elemento | Conjunto de dados | O que mede | Frequência |
+|---|---|---|---|
+| Despesa alimentar (âncora) | `nama_10_co3_p3` | Despesa efetiva em euros, Contas Nacionais | Anual |
+| Consumo total das famílias | `nama_10_co3_p3` | Denominador do coeficiente de Engel | Anual |
+| Dimensão média do agregado | `ilc_lvph01` | N.º médio de pessoas | Anual |
+| Número de agregados | `lfst_hhnhtych` (recuo: Censos 2021) | Divisor da despesa nacional | Anual |
+| Ponderadores por grupo | `prc_hicp_inw` | Fração de cada mil euros de consumo (‰) | Anual |
+| Índice de preços | `prc_hicp_midx` | Nível do índice — não são euros | Mensal |
+| Variação homóloga | `prc_hicp_manr` | Subida face ao mesmo mês do ano anterior | Mensal |
+| Nível de preços comparado | `prc_ppp_ind_1` | Quão caros são os alimentos (UE-27 = 100) | Anual |
+| Rendimento equivalente | `ilc_di03` | Rendimento líquido médio e mediano (EU-SILC) | Anual |
+| Salário mínimo | `earn_mw_cur` | Valor bruto legal mensal | Semestral |
+| Salário médio líquido | `earn_nt_net` | Remuneração líquida do trabalhador médio | Anual |
+
+**Códigos obtidos por tentativa.** Três destes conjuntos usam nomenclaturas que não coincidem
+com a COICOP do índice de preços, e cujos códigos exatos não foi possível verificar à distância:
+`prc_ppp_ind_1`, `earn_mw_cur` e `ilc_di03`. O código tenta várias hipóteses e usa a primeira
+que responda; se nenhuma responder, o painel respetivo não é apresentado e a ocorrência fica
+registada no diagnóstico. Se algum painel não aparecer, é aí que se deve olhar.
 
 ### O número de agregados familiares
 
@@ -368,6 +379,76 @@ margem do operador.
 
 ---
 
+## Indicadores de esforço
+
+A aplicação apresenta **dois** indicadores de esforço alimentar. Ambos são percentagens sobre
+alimentação, mas têm denominadores diferentes e não se substituem.
+
+### Coeficiente de Engel — despesa sobre despesa
+
+```
+Engel = despesa alimentar nacional ÷ consumo total das famílias
+```
+
+Mede **como se reparte o orçamento de consumo**: de cada 100 € que as famílias gastam em tudo,
+quantos vão para comida. **Não envolve salários nem rendimentos.**
+
+Chama-se assim por Ernst Engel, que em 1857 formulou a regularidade que ainda hoje se verifica:
+quanto menor o rendimento, maior a fatia do orçamento gasta em comida. É comparável entre
+países sem conversão cambial, por ser um rácio.
+
+É um **agregado macroeconómico nacional** e, por isso, **não responde à composição do agregado**
+escolhida na barra lateral. Não existe versão «por agregado» deste indicador nas Contas
+Nacionais.
+
+### Esforço do agregado — despesa sobre rendimento
+
+```
+rendimento do agregado = rendimento equivalente × unidades de consumo ÷ 12
+esforço                = despesa alimentar do agregado ÷ rendimento do agregado
+```
+
+Mede **quanto do rendimento é absorvido pela comida**, e **responde à composição** escolhida.
+
+Usa por defeito o rendimento **médio** equivalente, não o mediano: a despesa alimentar desta
+aplicação deriva de um agregado nacional dividido pelo número de agregados — ou seja, é uma
+**média**. Combiná-la com um rendimento mediano misturaria duas medidas de tendência central
+diferentes e inflacionaria o rácio. A mediana continua disponível, com aviso.
+
+### Face aos salários
+
+Além do rendimento do EU-SILC, o esforço é comparado com dois cenários de salários. Um único
+controlo — **adultos com rendimento** — evita a multiplicação de combinações: as crianças nunca
+entram nessa contagem, porque não auferem rendimento.
+
+| Referência | Natureza | Nota |
+|---|---|---|
+| Rendimento das famílias (EU-SILC) | Líquido | Inclui todas as fontes de rendimento e prestações |
+| N × salário médio | Líquido | Trabalhador médio, após imposto e contribuições |
+| N × salário mínimo | **Bruto** | Valor legal, antes de descontos |
+
+**Bruto e líquido não se misturam.** O salário mínimo é um valor legal bruto: não desconta
+contribuições nem imposto, nem inclui prestações familiares. O esforço calculado sobre ele
+subestima a pressão real, porque o rendimento efetivamente disponível é inferior. A aplicação
+assinala a natureza de cada referência com cor distinta.
+
+A assimetria que este bloco torna visível: **um casal com dois filhos e um só salário continua
+a ter um salário, mas quatro pessoas a alimentar.** É essa desproporção que faz o esforço
+disparar — e que nenhum indicador nacional médio revela.
+
+### Propriedade a conhecer
+
+A despesa usa a escala escolhida pelo utilizador; o rendimento tem de usar a OCDE modificada,
+porque é essa que o EU-SILC aplica. **Se as duas coincidirem, o esforço é constante** seja qual
+for a composição — ambos os lados escalam de forma idêntica. A subida do esforço com o número
+de pessoas resulta, portanto, da **diferença entre as escalas**.
+
+Isso não invalida a leitura — a alimentação tem economias de escala genuinamente mais fracas do
+que o consumo total —, mas a magnitude depende da escala. Leia a direção como robusta e o valor
+exato como condicional. Há um teste automático que fixa esta propriedade.
+
+---
+
 ## Limitações a declarar
 
 Qualquer utilização destes resultados em suporte à decisão ou em comunicação
@@ -421,7 +502,7 @@ ECOICOP versão 2. Se os códigos `CP011x` deixarem de responder, basta atualiza
 campo `cod` em `CLASSES`; o resto da aplicação não precisa de alterações.
 
 **Antes de qualquer alteração aos cálculos**, correr `python -m pytest tests/ -v`.
-Os 11 testes cobrem a aditividade da decomposição e a aritmética do IVA, incluindo
+Os 13 testes cobrem a aditividade da decomposição e a aritmética do IVA, incluindo
 casos-limite conhecidos.
 
 ---
