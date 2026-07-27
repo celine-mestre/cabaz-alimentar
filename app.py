@@ -19,7 +19,8 @@ from src import eurostat
 from src.calculos import (ESCALAS, decompor, despesa_do_agregado, intervalo_agregado,
                           resumo_decomposicao, resumo_iva, simular_iva,
                           unidades_equivalentes)
-from src.config import (AGREGADOS_ANO, AGREGADOS_CENSOS, AGREGADOS_FONTE,
+from src.config import (AGREGADOS, AGREGADOS_ANO, AGREGADOS_CENSOS, AGREGADOS_FONTE,
+                        COD_AGREGADOS,
                         DIMENSAO_RECUO, DIMENSAO_RECUO_FONTE,
                         AZUL, CLASSES, CODIGOS, COICOP_ALIMENTAR, DOURADO,
                         PAISES, PAISES_POR_DEFEITO, POR_CODIGO, RODAPE,
@@ -107,6 +108,11 @@ def carregar_dados(anos_historico: int = 6):
     desde_indice = f"{ano - anos_historico}-01"
     desde_variacao = f"{ano - 3}-01"
 
+    # Janela generosa para as fontes anuais e semestrais. Custa pouco em volume
+    # e garante que, mesmo com atraso de publicação, há sempre uma observação —
+    # a aplicação usa depois a mais recente de cada série.
+    JANELA = 8
+
     registo = []
 
     pesos_df, via1 = eurostat.ponderadores(CODIGOS)
@@ -120,24 +126,33 @@ def carregar_dados(anos_historico: int = 6):
     )
     registo.append(("Variações e UE-27", via3, len(var_df)))
 
+    # Agregados especiais: separam choque conjuntural de inflação estrutural.
+    try:
+        agr_esp_df, via12 = eurostat.variacoes(
+            COD_AGREGADOS, ["PT", "EU27_2020"], f"{ano - anos_historico}-01")
+        registo.append(("Agregados especiais do índice", via12, len(agr_esp_df)))
+    except Exception as exc:                                   # noqa: BLE001
+        agr_esp_df, via12 = pd.DataFrame(), f"indisponível ({exc})"
+        registo.append(("Agregados especiais do índice", via12, 0))
+
     # Âncora oficial em euros — Contas Nacionais (opcional: pode não estar
     # disponível para o último ano; a aplicação funciona sem ela).
     try:
-        desp_df, via4 = eurostat.despesa_alimentar(ano - anos_historico)
+        desp_df, via4 = eurostat.despesa_alimentar(ano - JANELA)
         registo.append(("Despesa alimentar (Contas Nacionais)", via4, len(desp_df)))
     except Exception as exc:                                   # noqa: BLE001
         desp_df, via4 = pd.DataFrame(), f"indisponível ({exc})"
         registo.append(("Despesa alimentar (Contas Nacionais)", via4, 0))
 
     try:
-        dim_df, via5 = eurostat.dimensao_agregado(ano - anos_historico)
+        dim_df, via5 = eurostat.dimensao_agregado(ano - JANELA)
         registo.append(("Dimensão média do agregado", via5, len(dim_df)))
     except Exception as exc:                                   # noqa: BLE001
         dim_df, via5 = pd.DataFrame(), f"indisponível ({exc})"
         registo.append(("Dimensão média do agregado", via5, 0))
 
     try:
-        agr_df, via6 = eurostat.numero_agregados(ano - anos_historico)
+        agr_df, via6 = eurostat.numero_agregados(ano - JANELA)
         registo.append(("N.º de agregados familiares", via6, len(agr_df)))
     except Exception as exc:                                   # noqa: BLE001
         agr_df, via6 = pd.DataFrame(), f"indisponível ({exc})"
@@ -150,7 +165,7 @@ def carregar_dados(anos_historico: int = 6):
     for candidato in eurostat.PPP_CANDIDATOS_ALIMENTOS:
         try:
             tentativa, via7 = eurostat.nivel_precos(
-                list(PAISES.keys()), candidato, ano - 4)
+                list(PAISES.keys()), candidato, ano - JANELA)
             if not tentativa.empty:
                 pli_df, pli_cat = tentativa, candidato
                 registo.append((f"Nível de preços ({candidato})", via7, len(tentativa)))
@@ -165,13 +180,13 @@ def carregar_dados(anos_historico: int = 6):
     # agregado total falhar, a despesa alimentar por país continua disponível.
     partes_engel = []
     try:
-        tot_df, via8a = eurostat.despesa_total_consumo(list(PAISES.keys()), ano - 5)
+        tot_df, via8a = eurostat.despesa_total_consumo(list(PAISES.keys()), ano - JANELA)
         registo.append(("Consumo total das famílias", via8a, len(tot_df)))
         partes_engel.append(tot_df)
     except Exception as exc:                                   # noqa: BLE001
         registo.append(("Consumo total das famílias", f"indisponível ({exc})", 0))
     try:
-        ali_df, via8b = eurostat.despesa_alimentar_paises(list(PAISES.keys()), ano - 5)
+        ali_df, via8b = eurostat.despesa_alimentar_paises(list(PAISES.keys()), ano - JANELA)
         registo.append(("Despesa alimentar por país", via8b, len(ali_df)))
         partes_engel.append(ali_df)
     except Exception as exc:                                   # noqa: BLE001
@@ -179,7 +194,7 @@ def carregar_dados(anos_historico: int = 6):
     engel_df = pd.concat(partes_engel, ignore_index=True) if len(partes_engel) == 2 else pd.DataFrame()
 
     try:
-        sm_df, via9 = eurostat.salario_minimo(list(PAISES.keys()), ano - 3)
+        sm_df, via9 = eurostat.salario_minimo(list(PAISES.keys()), ano - JANELA)
         registo.append(("Salário mínimo nacional", via9, len(sm_df)))
     except Exception as exc:                                   # noqa: BLE001
         sm_df, via9 = pd.DataFrame(), f"indisponível ({exc})"
@@ -189,7 +204,7 @@ def carregar_dados(anos_historico: int = 6):
     # despesa (que também é uma média); a mediana fica disponível para
     # caracterizar o agregado do meio da distribuição.
     try:
-        sme_df, via11 = eurostat.salario_medio(list(PAISES.keys()), ano - 4)
+        sme_df, via11 = eurostat.salario_medio(list(PAISES.keys()), ano - JANELA)
         registo.append(("Salário médio líquido", via11, len(sme_df)))
     except Exception as exc:                                   # noqa: BLE001
         sme_df, via11 = pd.DataFrame(), f"indisponível ({exc})"
@@ -198,7 +213,7 @@ def carregar_dados(anos_historico: int = 6):
     rend_por_tipo = {}
     for indic, nome_indic in [("MEI_E", "médio"), ("MED_E", "mediano")]:
         try:
-            df_r, via_r = eurostat.rendimento(list(PAISES.keys()), ano - 4, indic)
+            df_r, via_r = eurostat.rendimento(list(PAISES.keys()), ano - JANELA, indic)
             registo.append((f"Rendimento {nome_indic} equivalente", via_r, len(df_r)))
             rend_por_tipo[indic] = df_r
         except Exception as exc:                               # noqa: BLE001
@@ -315,6 +330,7 @@ def carregar_dados(anos_historico: int = 6):
                                 "valor": float(sub["valor"].iloc[-1])}
 
     return {
+        "agregados_especiais": agr_esp_df,
         "engel": engel,
         "rendimento": rendimento,
         "salario": salario,
@@ -916,6 +932,84 @@ mês do ano anterior.
         "de cabazes publicadas por entidades privadas, mas não são dados oficiais nem têm "
         "acesso automático, e as variações semanais são muito voláteis por efeitos de base."
     )
+
+    # ---------- o que está por trás da inflação alimentar ----------
+    agr_esp = dados.get("agregados_especiais")
+    if agr_esp is not None and not agr_esp.empty:
+        st.divider()
+        st.markdown("#### O que está por trás — alimentação no conjunto dos preços")
+        st.info("""
+Uma pergunta recorrente no debate público: *como pode Portugal ter inflação baixa e o cabaz
+continuar a subir?* A resposta está na decomposição do índice. A **alimentação não transformada**
+— frescos, sobretudo — reage a choques climáticos e sazonais e é muito mais volátil do que o
+resto; a **subjacente**, que exclui energia e alimentos, mostra a pressão estrutural.
+
+Distinguir as duas é o que separa um **choque conjuntural** de uma **inflação instalada** — e
+condiciona a resposta de política: um choque de oferta não se combate com os mesmos
+instrumentos que uma inflação de procura.
+        """)
+
+        pt_esp = agr_esp[agr_esp["geo"] == "PT"]
+        meses_esp = sorted(pt_esp["time"].unique())
+        if inicio_sel is not None:
+            meses_esp = [m for m in meses_esp if inicio_sel <= m <= fim_sel]
+
+        escolha_ag = st.multiselect(
+            "Agregados a comparar", options=COD_AGREGADOS,
+            default=["CP00", "FOOD", "FOOD_NP", "TOT_X_NRG_FOOD"],
+            format_func=lambda c: next(a["nome"] for a in AGREGADOS if a["cod"] == c),
+        )
+
+        if escolha_ag and meses_esp:
+            figA = go.Figure()
+            for a in AGREGADOS:
+                if a["cod"] not in escolha_ag:
+                    continue
+                sub = pt_esp[pt_esp["coicop"] == a["cod"]].set_index("time")["valor"]
+                if sub.empty:
+                    continue
+                figA.add_trace(go.Scatter(
+                    x=[mes_pt(m) for m in meses_esp],
+                    y=[sub.get(m) for m in meses_esp],
+                    name=a["nome"], line=dict(color=a["cor"], width=a["larg"]),
+                    hovertemplate="%{x}<br>%{y:.1f} %<extra>" + a["nome"] + "</extra>"))
+            figA.update_layout(height=400, margin=dict(t=20, b=40, l=10, r=10),
+                               yaxis_title="Variação homóloga (%)",
+                               legend=dict(orientation="h", y=1.14, x=0),
+                               hovermode="x unified", plot_bgcolor="#fff")
+            figA.update_xaxes(showgrid=False)
+            figA.update_yaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
+            st.plotly_chart(figA, use_container_width=True)
+
+            ult_esp = meses_esp[-1]
+            linhas_a = []
+            for a in AGREGADOS:
+                sub = pt_esp[(pt_esp["coicop"] == a["cod"]) & (pt_esp["time"] == ult_esp)]
+                if sub.empty:
+                    continue
+                ue_sub = agr_esp[(agr_esp["geo"] == "EU27_2020") &
+                                 (agr_esp["coicop"] == a["cod"]) &
+                                 (agr_esp["time"] == ult_esp)]
+                linhas_a.append({
+                    "Agregado": a["nome"],
+                    "Portugal (%)": round(float(sub["valor"].iloc[0]), 1),
+                    "UE-27 (%)": (round(float(ue_sub["valor"].iloc[0]), 1)
+                                  if not ue_sub.empty else None),
+                })
+            if linhas_a:
+                st.dataframe(pd.DataFrame(linhas_a), use_container_width=True, hide_index=True)
+                st.caption(
+                    f"Variação homóloga em {mes_pt(ult_esp)}. **Não transformados** são os "
+                    "produtos frescos — carne, peixe, fruta, legumes; **transformados** incluem "
+                    "pão, laticínios, conservas. A **subjacente** exclui energia e alimentos e "
+                    "é a medida que os bancos centrais seguem para avaliar pressão estrutural."
+                )
+                st.download_button(
+                    "⬇️ Descarregar agregados (CSV com fonte)",
+                    csv_com_fonte(pd.DataFrame(linhas_a),
+                                  "Agregados especiais do indice de precos", dados,
+                                  extra=[("Mes de referencia", ult_esp)]),
+                    f"despesa_alimentar_agregados_{date.today()}.csv", "text/csv")
 
     serie = dados["indice_pt"][["time", "valor"]].rename(
         columns={"time": "Período", "valor": f"Índice ({base})"})
@@ -1688,6 +1782,92 @@ uma refeição como se partilha um teto. Aplicá-la ao consumo alimentar **subes
 dos agregados maiores, que são justamente o grupo politicamente sensível.
         """)
 
+    with st.expander("💰 Rendimento e salários — o que é bruto, o que é líquido"):
+        st.markdown("""
+Três fontes distintas alimentam os indicadores de esforço. **A diferença entre bruto e líquido
+não é um detalhe: muda o resultado de forma material** e, se ignorada, leva a subestimar a
+pressão sobre quem aufere menos.
+
+| Fonte | Conjunto | O que é | Natureza | Frequência |
+|---|---|---|---|---|
+| Rendimento das famílias | [`ilc_di03`](https://ec.europa.eu/eurostat/databrowser/view/ilc_di03/default/table) | Rendimento monetário do agregado, todas as fontes | **Líquido** | Anual |
+| Salário médio | [`earn_nt_net`](https://ec.europa.eu/eurostat/databrowser/view/earn_nt_net/default/table) | Remuneração do trabalhador médio | **Líquido** | Anual |
+| Salário mínimo | [`earn_mw_cur`](https://ec.europa.eu/eurostat/databrowser/view/earn_mw_cur/default/table) | Valor legal mensal | **Bruto** | Semestral (janeiro e julho) |
+
+**Rendimento das famílias.** Vem do EU-SILC e é o mais completo: inclui salários, pensões,
+prestações sociais, rendimentos de capital e transferências, deduzidos impostos e contribuições.
+É publicado **por unidade de consumo equivalente** — já dividido pelas unidades do agregado,
+segundo a escala OCDE modificada. Para obter o rendimento de um agregado concreto, multiplica-se
+pelas suas unidades equivalentes.
+
+Estão disponíveis a **média** e a **mediana**. A aplicação usa a média por defeito, porque a
+despesa alimentar também é uma média — combinar média com mediana inflacionaria o rácio.
+
+**Salário médio.** Remuneração líquida anual do trabalhador médio: já deduzidos o imposto sobre
+o rendimento e as contribuições do trabalhador, e somadas as prestações familiares. É por isso
+comparável com o rendimento do EU-SILC.
+
+**Salário mínimo.** É o **valor legal bruto**, tal como fixado por diploma. Não desconta a
+contribuição do trabalhador para a Segurança Social nem o imposto retido, nem inclui prestações
+familiares. O rendimento efetivamente disponível de quem aufere o mínimo é **inferior** ao valor
+apresentado — logo, o esforço alimentar real é **superior** ao que este rácio indica.
+
+É por essa razão que a aplicação assinala as duas naturezas com cores distintas e adverte que
+não são diretamente comparáveis entre si.
+
+**As crianças não auferem rendimento.** O multiplicador de salários é sempre o número de
+**adultos com rendimento**, nunca o total de pessoas do agregado.
+        """)
+
+    with st.expander("🔄 Como a aplicação se mantém atualizada"):
+        st.markdown("""
+**Não há dados gravados na aplicação.** Nada é fixado no código: em cada arranque, a aplicação
+pede ao Eurostat as séries de que precisa e usa **a observação mais recente de cada uma**.
+
+**Como escolhe o valor mais recente.** Para cada série, ordena as observações por período e fica
+com a última. Isso funciona qualquer que seja a periodicidade — mensal (`2026-06`), semestral
+(`2026S1`) ou anual (`2026`) — porque a codificação de períodos do Eurostat é ordenável.
+A consequência prática: **quando o Eurostat publicar um mês novo, a aplicação passa a usá-lo sem
+qualquer alteração ao código**.
+
+**Janela de pedido.** As séries anuais e semestrais são pedidas com **oito anos** de margem. É
+folgado de propósito: se uma publicação atrasar, continua a haver observações no intervalo e a
+aplicação não fica sem dados. As séries mensais usam janelas mais curtas, por serem densas.
+
+**Cache de seis horas.** Os dados ficam guardados em memória durante seis horas, para não repetir
+pedidos desnecessários — as séries mudam no máximo uma vez por mês. O botão **Recarregar do
+Eurostat**, na barra lateral, limpa a cache e força um pedido novo.
+
+**O período de cada valor está sempre visível.** Cada indicador mostra o seu período de
+referência — «Salário mínimo (2026S1)», «Contas Nacionais 2024» — para que nunca se confunda a
+data da consulta com a data do dado.
+        """)
+        st.info("""
+**Quando esperar dados novos**
+
+| Dado | Publicação |
+|---|---|
+| Estimativa rápida do índice (só agregados) | Último dia útil do mês de referência |
+| **Índice completo, com todas as classes** | **Cerca do dia 17 do mês seguinte** |
+| Ponderadores | Com os dados de janeiro, em fevereiro |
+| Salário mínimo | Janeiro e julho |
+| Rendimento e salário médio (EU-SILC) | Anual, com cerca de um ano de desfasamento |
+| Contas Nacionais (âncora em euros) | Anual, com cerca de dois anos de desfasamento |
+| Paridades de poder de compra | Junho do ano seguinte |
+
+O separador mostra sempre o último mês disponível no topo da aplicação. Se um valor parecer
+desatualizado, é porque a fonte ainda não publicou — não porque a aplicação não o foi buscar.
+        """)
+        st.warning("""
+**Alteração metodológica de fevereiro de 2026.** A partir dos dados de janeiro de 2026, o índice
+passou a ser compilado segundo a **ECOICOP versão 2** (alinhada com a COICOP 2018) e o período de
+referência passou para **2025 = 100**. As séries com a classificação anterior foram arquivadas.
+
+A aplicação prefere automaticamente a base mais recente disponível, com recuo ordenado para as
+anteriores. Se em algum momento as classes de produtos deixarem de responder, é nesta alteração
+que se deve olhar primeiro.
+        """)
+
     with st.expander("🗂️ Origem dos dados — conjuntos utilizados e ligações"):
         st.markdown("""
 Todos os dados quantitativos são obtidos em direto do **Eurostat**, que difunde as estatísticas
@@ -1702,12 +1882,17 @@ diretamente o conjunto no Data Browser do Eurostat.
 | Despesa alimentar (âncora) | [`nama_10_co3_p3`](https://ec.europa.eu/eurostat/databrowser/view/nama_10_co3_p3/default/table) | Despesa efetiva em euros (Contas Nacionais) | Anual |
 | Dimensão do agregado | [`ilc_lvph01`](https://ec.europa.eu/eurostat/databrowser/view/ilc_lvph01/default/table) | N.º médio de pessoas por agregado | Anual |
 | N.º de agregados | [`lfst_hhnhtych`](https://ec.europa.eu/eurostat/databrowser/view/lfst_hhnhtych/default/table) | Total de agregados familiares (milhares) | Anual |
+| Nível de preços comparado | [`prc_ppp_ind_1`](https://ec.europa.eu/eurostat/databrowser/view/prc_ppp_ind_1/default/table) | Quão caros são os alimentos (UE-27 = 100) | Anual |
+| Rendimento das famílias | [`ilc_di03`](https://ec.europa.eu/eurostat/databrowser/view/ilc_di03/default/table) | Rendimento líquido equivalente, médio e mediano | Anual |
+| Salário médio | [`earn_nt_net`](https://ec.europa.eu/eurostat/databrowser/view/earn_nt_net/default/table) | Remuneração líquida do trabalhador médio | Anual |
+| Salário mínimo | [`earn_mw_cur`](https://ec.europa.eu/eurostat/databrowser/view/earn_mw_cur/default/table) | Valor legal mensal, **bruto** | Semestral |
 
 **Parâmetros que não são dados oficiais**
 
 | Parâmetro | Origem | Nota |
 |---|---|---|
 | Taxas de IVA | Predefinidas, editáveis | Limitadas às do Código do IVA; correspondência ao grupo COICOP é aproximada |
+| Adultos com rendimento | Parâmetro do utilizador | Multiplicador dos salários; as crianças não entram |
 | Repercussão | Parâmetro do utilizador | Hipótese de trabalho, não estimativa |
 
 **Recuo do n.º de agregados:** se o conjunto anual do Eurostat não estiver disponível ou

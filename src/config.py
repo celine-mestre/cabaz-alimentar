@@ -41,6 +41,21 @@ POR_CODIGO = {c["cod"]: c for c in CLASSES}
 COICOP_ALIMENTAR = "CP011"
 
 # --------------------------------------------------------------------------
+# Agregados especiais do índice — permitem separar o que é choque conjuntural
+# do que é inflação estrutural, e situar a alimentação no conjunto dos preços.
+# --------------------------------------------------------------------------
+AGREGADOS = [
+    {"cod": "CP00",           "nome": "Todos os produtos",        "cor": "#171715", "larg": 2.6},
+    {"cod": "FOOD",           "nome": "Alimentação e bebidas",    "cor": "#0E7433", "larg": 2.6},
+    {"cod": "FOOD_NP",        "nome": "Alimentos não transformados", "cor": "#D02117", "larg": 2.0},
+    {"cod": "FOOD_P",         "nome": "Alimentos transformados",  "cor": "#BE9C54", "larg": 2.0},
+    {"cod": "NRG",            "nome": "Energia",                  "cor": "#7a5ea8", "larg": 1.8},
+    {"cod": "TOT_X_NRG_FOOD", "nome": "Subjacente (sem energia nem alimentos)",
+     "cor": "#2B5683", "larg": 1.8},
+]
+COD_AGREGADOS = [a["cod"] for a in AGREGADOS]
+
+# --------------------------------------------------------------------------
 # Países para comparação europeia
 # --------------------------------------------------------------------------
 PAISES = {

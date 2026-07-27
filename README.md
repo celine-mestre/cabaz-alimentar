@@ -214,6 +214,7 @@ harmonizado de preços no consumidor (IHPC) compilado pelos institutos nacionais
 | Rendimento equivalente | `ilc_di03` | Rendimento líquido médio e mediano (EU-SILC) | Anual |
 | Salário mínimo | `earn_mw_cur` | Valor bruto legal mensal | Semestral |
 | Salário médio líquido | `earn_nt_net` | Remuneração líquida do trabalhador médio | Anual |
+| Agregados especiais do índice | `prc_hicp_manr` | Total, alimentos transformados e não transformados, energia, subjacente | Mensal |
 
 **Códigos obtidos por tentativa.** Três destes conjuntos usam nomenclaturas que não coincidem
 com a COICOP do índice de preços, e cujos códigos exatos não foi possível verificar à distância:
@@ -415,6 +416,20 @@ aplicação deriva de um agregado nacional dividido pelo número de agregados �
 **média**. Combiná-la com um rendimento mediano misturaria duas medidas de tendência central
 diferentes e inflacionaria o rácio. A mediana continua disponível, com aviso.
 
+### As três fontes de rendimento — e a distinção bruto/líquido
+
+| Fonte | Conjunto | O que é | Natureza |
+|---|---|---|---|
+| Rendimento das famílias | `ilc_di03` | Rendimento do agregado, todas as fontes, deduzidos impostos e contribuições | **Líquido** |
+| Salário médio | `earn_nt_net` | Remuneração do trabalhador médio, após imposto e contribuições, com prestações familiares | **Líquido** |
+| Salário mínimo | `earn_mw_cur` | Valor legal mensal, tal como fixado por diploma | **Bruto** |
+
+**A distinção não é um detalhe.** O salário mínimo não desconta a contribuição do trabalhador
+nem o imposto retido, nem inclui prestações familiares. O rendimento efetivamente disponível de
+quem aufere o mínimo é **inferior** ao valor publicado — logo o esforço alimentar real é
+**superior** ao que o rácio indica. A aplicação assinala as duas naturezas com cores distintas
+e adverte que não são comparáveis entre si.
+
 ### Face aos salários
 
 Além do rendimento do EU-SILC, o esforço é comparado com dois cenários de salários. Um único
@@ -486,6 +501,54 @@ deve fazer-se acompanhar destas ressalvas:
    Nacionais, IDEF ou dados da Autoridade Tributária.
 
 ---
+
+## Como a aplicação se mantém atualizada
+
+**Não há dados gravados no código.** Em cada arranque, a aplicação pede ao Eurostat as séries de
+que precisa e usa **a observação mais recente de cada uma**.
+
+**Seleção do valor mais recente.** Para cada série, as observações são ordenadas por período e
+retém-se a última. Funciona para qualquer periodicidade — mensal (`2026-06`), semestral
+(`2026S1`) ou anual (`2026`) — porque a codificação de períodos do Eurostat é ordenável. Quando o
+Eurostat publicar um mês novo, a aplicação passa a usá-lo **sem qualquer alteração ao código**.
+
+**Janela de pedido.** As séries anuais e semestrais são pedidas com **oito anos** de margem
+(constante `JANELA` em `app.py`). É folgado de propósito: se uma publicação atrasar, continua a
+haver observações no intervalo. As mensais usam janelas mais curtas, por serem densas.
+
+**Cache de seis horas.** Evita repetir pedidos desnecessários — as séries mudam no máximo uma vez
+por mês. O botão **Recarregar do Eurostat** limpa a cache e força um pedido novo.
+
+**Período visível.** Cada indicador mostra o seu período de referência, para que não se confunda
+a data da consulta com a data do dado.
+
+## Calendário de divulgação
+
+Saber quando os dados mudam evita conclusões precipitadas sobre variações que são apenas
+atualizações de fonte.
+
+| Dado | Publicação | Desfasamento |
+|---|---|---|
+| Estimativa rápida (só agregados) | Último dia útil do mês de referência | Semanas |
+| **Índice completo, com todas as classes** | **Cerca do dia 17 do mês seguinte** | ~2 semanas |
+| Ponderadores | Com os dados de janeiro, em fevereiro | Anual |
+| Contas Nacionais (âncora) | — | ~2 anos |
+| EU-SILC (rendimento, dimensão) | — | ~1 ano |
+| Paridades de poder de compra | Junho do ano seguinte | ~1 ano |
+| Salário mínimo | Janeiro e julho | Semestral |
+
+A aplicação usa sempre o mês mais recente disponível e indica-o no topo. Os dados ficam em
+*cache* durante 6 horas; o botão **Recarregar do Eurostat** força a atualização.
+
+### Alterações metodológicas de fevereiro de 2026
+
+A partir dos dados de janeiro de 2026, o índice passou a ser compilado segundo a **ECOICOP
+versão 2**, alinhada com a COICOP 2018, e o período de referência do índice passou para
+**2025 = 100**. As séries com a classificação anterior foram arquivadas.
+
+A aplicação já prefere a base mais recente disponível, com recuo ordenado para as anteriores.
+Se em algum momento as classes `CP011x` deixarem de responder, é nesta alteração que se deve
+olhar primeiro.
 
 ## Manutenção
 
