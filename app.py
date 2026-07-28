@@ -605,9 +605,14 @@ with st.sidebar:
 
     st.caption("**Composição do agregado**")
     ca, cb = st.columns(2)
-    adultos = ca.number_input("Adultos", min_value=1, max_value=8, value=2, step=1)
+    adultos = ca.number_input(
+        "Com 14+ anos", min_value=1, max_value=10, value=2, step=1,
+        help=("Todas as pessoas com 14 ou mais anos, incluindo jovens dependentes. "
+              "A partir dessa idade, a escala de equivalência atribui o mesmo peso "
+              "alimentar — um jovem de 15 anos come como um adulto, mesmo que não "
+              "aufira rendimento."))
     criancas = cb.number_input(
-        "Crianças (<14 anos)", min_value=0, max_value=8, value=0, step=1,
+        "Menos de 14 anos", min_value=0, max_value=10, value=0, step=1,
         help=("14 anos é o limiar definido pelas próprias escalas de equivalência "
               "da OCDE e do Eurostat — não é a definição demográfica de criança. "
               "Ver separador Metodologia."))
@@ -623,9 +628,13 @@ with st.sidebar:
         media_agregado, dim_efetiva, adultos, criancas, escala_chave)
     faixa = intervalo_agregado(media_agregado, dim_efetiva, adultos, criancas)
 
-    composicao = (f"{adultos} adulto{'s' if adultos > 1 else ''}"
-                  + (f" + {criancas} criança{'s' if criancas > 1 else ''}"
-                     if criancas else ""))
+    # O rótulo tem de refletir o que a escala mede: pessoas com 14 ou mais anos
+    # pesam como adultos, tenham ou não rendimento próprio.
+    if criancas:
+        composicao = (f"{adultos} com 14+ anos e {criancas} "
+                      + ("menores de 14" if criancas > 1 else "menor de 14"))
+    else:
+        composicao = f"{adultos} pessoa{'s' if adultos > 1 else ''} com 14+ anos"
     pessoas = adultos + criancas
     ue = unidades_equivalentes(adultos, criancas, escala_chave)
     origem = (f"Contas Nacionais {ancora['ano_base']} · {composicao} · "
@@ -793,6 +802,184 @@ contributos de todos os grupos dá exatamente o agravamento total dos últimos 1
             fig.update_xaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
             st.plotly_chart(fig, use_container_width=True)
 
+    # ---- esforço do agregado escolhido ----
+    st.divider()
+    st.markdown(f"#### Quanto pesa no orçamento — {composicao}")
+
+    rendimentos = dados.get("rendimento") or {}
+    sm_pt = (dados.get("salario") or {}).get("PT")
+    sme_pt = (dados.get("salario_medio") or {}).get("PT")
+    tem_rend = any(rendimentos.get(k, {}).get("PT") for k in ("MEI_E", "MED_E"))
+
+    if not tem_rend and not sm_pt and not sme_pt:
+        st.info(
+            "Os indicadores de rendimento não estão disponíveis nesta sessão. "
+            "Consulte o registo de ligações no separador Metodologia."
+        )
+    else:
+        ca_, cb_ = st.columns([1, 2])
+        with ca_:
+            trabalhadores = st.number_input(
+                "Quantos auferem rendimento", min_value=1, max_value=int(adultos),
+                value=min(int(adultos), 2), step=1,
+                help=("Das pessoas com 14 ou mais anos, quantas auferem "
+                      "efetivamente rendimento. Jovens dependentes, estudantes "
+                      "e pessoas sem rendimento próprio não contam — mas "
+                      "continuam a pesar na despesa alimentar."),
+            )
+            dependentes = int(adultos) - int(trabalhadores)
+        with cb_:
+            st.markdown(
+                f"<div style='padding-top:26px;font-size:12.5px;color:#4a4a48'>"
+                f"<strong>{pessoas}</strong> pessoa{'s' if pessoas > 1 else ''} a "
+                f"alimentar · <strong>{trabalhadores}</strong> "
+                + ("auferem" if trabalhadores > 1 else "aufere")
+                + " rendimento"
+                + (f" · <strong>{dependentes}</strong> com 14+ anos sem rendimento próprio"
+                   if dependentes else "")
+                + (f" · <strong>{criancas}</strong> com menos de 14 anos"
+                   if criancas else "")
+                + f"<br>Despesa alimentar mensal: <strong>{euro(valor_cabaz)}</strong>."
+                "</div>",
+                unsafe_allow_html=True)
+
+            if dependentes:
+                st.warning(f"""
+**{dependentes} pessoa{'s' if dependentes > 1 else ''} com 14 ou mais anos sem rendimento
+próprio.** Adolescentes, estudantes ou outros dependentes **comem como adultos** — a escala de
+equivalência atribui-lhes o mesmo peso alimentar — mas **não trazem receita**. É a composição
+em que o esforço alimentar é mais elevado, e a que os indicadores médios menos revelam.
+                """)
+
+        st.error("""
+**Leia isto antes de usar estes números.** O esforço apresentado é um **limite superior**, não
+uma estimativa. A razão é de fundo, e foi detetada em auditoria:
+
+O **numerador** — a despesa alimentar — vem das **Contas Nacionais**. O **denominador** — o
+rendimento — vem do **EU-SILC**. São universos estatísticos diferentes: as Contas Nacionais
+incluem rendas imputadas, consumo de instituições sem fins lucrativos e consumo no território,
+incluindo o de não residentes; o EU-SILC mede rendimento monetário líquido dos residentes.
+
+O consumo por agregado das Contas Nacionais é estruturalmente **cerca de 1,8 vezes** o
+rendimento do EU-SILC — um rácio que implicaria taxa de poupança fortemente negativa, o que não
+corresponde à realidade. **Combinar as duas bases sobrestima o esforço.**
+
+Sinal prático: se o esforço aqui exceder o coeficiente de Engel da secção anterior, é este o
+motivo. Para o mesmo agregado, o esforço sobre o *rendimento* deveria ser **inferior** ao peso
+no *consumo*, porque as famílias poupam.
+
+**Como usar:** leia as **diferenças entre composições** e a **direção** como informativas; leia
+o **nível** como majorante. Um rácio internamente coerente exigiria despesa e rendimento da
+mesma fonte — o que só o IDEF/INE permite.
+        """)
+
+        # --- construir as referências disponíveis ---
+        refs = []
+        indic_r = None
+        if tem_rend:
+            disponiveis = [k for k in ("MEI_E", "MED_E")
+                           if rendimentos.get(k, {}).get("PT")]
+            indic_r = "MEI_E" if "MEI_E" in disponiveis else disponiveis[0]
+            r = rendimentos[indic_r]["PT"]
+            ue_ocde = unidades_equivalentes(adultos, criancas, "ocde_modificada")
+            refs.append({
+                "ref": "Rendimento das famílias (EU-SILC)",
+                "detalhe": (f"{'Médio' if indic_r == 'MEI_E' else 'Mediano'} equivalente "
+                            f"{r['ano']} × {('%.2f' % ue_ocde).replace('.', ',')} unidades"),
+                "mensal": r["valor"] * ue_ocde / 12,
+                "natureza": "líquido",
+            })
+        if sme_pt:
+            refs.append({
+                "ref": f"{trabalhadores} × salário médio",
+                "detalhe": f"Remuneração média anual, bruta, {sme_pt['ano']}",
+                "mensal": sme_pt["valor"] * trabalhadores / 12,
+                "natureza": "líquido",
+            })
+        if sm_pt:
+            refs.append({
+                "ref": f"{trabalhadores} × salário mínimo",
+                "detalhe": f"Valor legal bruto, {sm_pt['periodo']}",
+                "mensal": sm_pt["valor"] * trabalhadores,
+                "natureza": "bruto",
+            })
+
+        for r in refs:
+            r["esforco"] = valor_cabaz / r["mensal"] * 100 if r["mensal"] else None
+
+        tab_r = pd.DataFrame([{
+            "Referência": r["ref"],
+            "Rendimento mensal": euro(r["mensal"]),
+            "Esforço alimentar": (f"{r['esforco']:.1f} %".replace(".", ",")
+                                  if r["esforco"] is not None else "—"),
+            "Natureza": r["natureza"],
+            "Detalhe": r["detalhe"],
+        } for r in refs])
+        st.dataframe(tab_r, use_container_width=True, hide_index=True)
+
+        figR = go.Figure(go.Bar(
+            y=[r["ref"] for r in refs],
+            x=[r["esforco"] for r in refs], orientation="h",
+            marker_color=[VERDE if r["natureza"] == "líquido" else DOURADO
+                          for r in refs],
+            text=[f"{r['esforco']:.1f} %".replace(".", ",") for r in refs],
+            textposition="outside",
+            hovertemplate="%{y}: %{x:.1f} % do rendimento<extra></extra>"))
+        figR.update_layout(height=max(200, 60 * len(refs)),
+                           margin=dict(t=20, b=40, l=10, r=70),
+                           xaxis_title="Fatia do rendimento absorvida pela alimentação (%)",
+                           plot_bgcolor="#fff", showlegend=False)
+        figR.update_xaxes(gridcolor="#eef1f4")
+        st.plotly_chart(figR, use_container_width=True)
+
+        st.caption(
+            "**Verde:** rendimento **líquido** — depois de impostos e contribuições. "
+            "**Dourado:** valores **brutos** — salário médio e salário mínimo, antes de "
+            "descontos. O rendimento efetivamente disponível é inferior, pelo que o esforço "
+            "real sobre eles é **superior** ao apresentado. Verde e dourado não são "
+            "diretamente comparáveis entre si."
+        )
+
+        with st.expander("⚠️ O que estes cálculos assumem — leitura obrigatória"):
+            st.markdown(f"""
+**1 · As crianças não auferem rendimento.** O número de salários multiplica-se pelos
+**adultos com rendimento** indicados acima, nunca pelo total de pessoas. Um casal com dois
+filhos e dois salários continua a ter dois salários — mas quatro pessoas a alimentar, e é
+essa assimetria que faz o esforço subir.
+
+**2 · Bruto e líquido não se misturam.** O salário mínimo é um valor legal **bruto**: não
+desconta contribuições nem imposto, nem inclui prestações familiares. O rendimento do EU-SILC
+e o salário médio são **líquidos**. Comparar diretamente os dois esforços sobrestima o
+rendimento disponível de quem aufere o mínimo.
+
+**3 · O agregado está num valor central da distribuição.** Agregados abaixo dele têm esforço
+**superior** ao apresentado — e é justamente aí que a pressão alimentar mais se faz sentir.
+Uma medida por escalão de rendimento exigiria o IDEF/INE ou microdados do EU-SILC.
+
+**4 · Numerador e denominador usam escalas diferentes.** A despesa alimentar é ajustada pela
+escala que escolheu na barra lateral (**{ESCALAS[escala_chave]["nome"].split(" (")[0]}**); o
+rendimento do EU-SILC tem de usar a **OCDE modificada**, que é a que esse inquérito aplica.
+A consequência é mensurável:
+
+| Escala usada na despesa | 1 adulto | Casal | Casal + 2 |
+|---|---|---|---|
+| OCDE modificada (igual à do rendimento) | 25,9 % | 25,9 % | 25,9 % |
+| OCDE original | 22,3 % | 25,2 % | 28,6 % |
+| Per capita | 18,4 % | 24,5 % | 35,0 % |
+
+*(valores ilustrativos, com dados de referência)*
+
+Se as duas escalas coincidirem, **o esforço é constante** seja qual for a composição — ambos
+os lados escalam de forma idêntica. A subida com o número de pessoas resulta, portanto, da
+**diferença entre as escalas**. Isso não invalida a leitura, porque a alimentação tem
+economias de escala genuinamente mais fracas do que o consumo total; mas a **magnitude**
+depende da escala escolhida.
+
+**Como usar:** leia a **direção** como robusta e o **valor exato** como condicional. Teste
+sempre a sensibilidade mudando a escala na barra lateral.
+            """)
+
+
     # ------- blocos recolhíveis lado a lado, para reduzir o deslocamento -------
     e1, e2, e3 = st.columns(3)
 
@@ -937,16 +1124,18 @@ mês do ano anterior.
     agr_esp = dados.get("agregados_especiais")
     if agr_esp is not None and not agr_esp.empty:
         st.divider()
-        st.markdown("#### O que está por trás — alimentação no conjunto dos preços")
+        st.markdown("#### O que está por trás da subida")
         st.info("""
-Uma pergunta recorrente no debate público: *como pode Portugal ter inflação baixa e o cabaz
-continuar a subir?* A resposta está na decomposição do índice. A **alimentação não transformada**
-— frescos, sobretudo — reage a choques climáticos e sazonais e é muito mais volátil do que o
-resto; a **subjacente**, que exclui energia e alimentos, mostra a pressão estrutural.
+A alimentação não é um bloco homogéneo. **Os frescos e os transformados obedecem a lógicas
+diferentes** — e distingui-los muda a resposta de política:
 
-Distinguir as duas é o que separa um **choque conjuntural** de uma **inflação instalada** — e
-condiciona a resposta de política: um choque de oferta não se combate com os mesmos
-instrumentos que uma inflação de procura.
+- **Não transformados** (carne, peixe, fruta, legumes) reagem a clima, sazonalidade e custos de
+  transporte. Uma subida aqui é tipicamente **choque de oferta**: passa, mas dói no imediato.
+- **Transformados** (pão, laticínios, conservas) refletem custos de produção e distribuição já
+  incorporados. Uma subida aqui tende a ser **mais persistente**.
+
+Um choque de oferta em frescos não se combate com os mesmos instrumentos que uma inflação
+instalada nos transformados. Daí que a decomposição não seja um detalhe técnico.
         """)
 
         pt_esp = agr_esp[agr_esp["geo"] == "PT"]
@@ -954,36 +1143,39 @@ instrumentos que uma inflação de procura.
         if inicio_sel is not None:
             meses_esp = [m for m in meses_esp if inicio_sel <= m <= fim_sel]
 
-        escolha_ag = st.multiselect(
-            "Agregados a comparar", options=COD_AGREGADOS,
-            default=["CP00", "FOOD", "FOOD_NP", "TOT_X_NRG_FOOD"],
-            format_func=lambda c: next(a["nome"] for a in AGREGADOS if a["cod"] == c),
-        )
+        so_alim = st.toggle(
+            "Mostrar também os agregados de enquadramento", value=False,
+            help=("Inflação geral e subjacente. Não são alimentação — servem para situar "
+                  "a subida alimentar no conjunto dos preços."))
+        visiveis = [a for a in AGREGADOS
+                    if so_alim or a["grupo"] == "alimentacao"]
 
-        if escolha_ag and meses_esp:
+        if visiveis and meses_esp:
             figA = go.Figure()
-            for a in AGREGADOS:
-                if a["cod"] not in escolha_ag:
-                    continue
+            for a in visiveis:
                 sub = pt_esp[pt_esp["coicop"] == a["cod"]].set_index("time")["valor"]
                 if sub.empty:
                     continue
                 figA.add_trace(go.Scatter(
                     x=[mes_pt(m) for m in meses_esp],
                     y=[sub.get(m) for m in meses_esp],
-                    name=a["nome"], line=dict(color=a["cor"], width=a["larg"]),
+                    name=a["nome"],
+                    line=dict(color=a["cor"], width=a["larg"],
+                              dash="dot" if a["grupo"] == "enquadramento" else "solid"),
                     hovertemplate="%{x}<br>%{y:.1f} %<extra>" + a["nome"] + "</extra>"))
             figA.update_layout(height=400, margin=dict(t=20, b=40, l=10, r=10),
                                yaxis_title="Variação homóloga (%)",
-                               legend=dict(orientation="h", y=1.14, x=0),
+                               legend=dict(orientation="h", y=1.16, x=0),
                                hovermode="x unified", plot_bgcolor="#fff")
             figA.update_xaxes(showgrid=False)
             figA.update_yaxes(gridcolor="#eef1f4", zerolinecolor="#cbd5e1")
             st.plotly_chart(figA, use_container_width=True)
+            if so_alim:
+                st.caption("A tracejado, os agregados de enquadramento — não são alimentação.")
 
             ult_esp = meses_esp[-1]
             linhas_a = []
-            for a in AGREGADOS:
+            for a in visiveis:
                 sub = pt_esp[(pt_esp["coicop"] == a["cod"]) & (pt_esp["time"] == ult_esp)]
                 if sub.empty:
                     continue
@@ -991,25 +1183,25 @@ instrumentos que uma inflação de procura.
                                  (agr_esp["coicop"] == a["cod"]) &
                                  (agr_esp["time"] == ult_esp)]
                 linhas_a.append({
+                    "": ("🍽️" if a["grupo"] == "alimentacao" else "📊"),
                     "Agregado": a["nome"],
                     "Portugal (%)": round(float(sub["valor"].iloc[0]), 1),
                     "UE-27 (%)": (round(float(ue_sub["valor"].iloc[0]), 1)
                                   if not ue_sub.empty else None),
+                    "Para que serve": a["porque"],
                 })
             if linhas_a:
                 st.dataframe(pd.DataFrame(linhas_a), use_container_width=True, hide_index=True)
                 st.caption(
-                    f"Variação homóloga em {mes_pt(ult_esp)}. **Não transformados** são os "
-                    "produtos frescos — carne, peixe, fruta, legumes; **transformados** incluem "
-                    "pão, laticínios, conservas. A **subjacente** exclui energia e alimentos e "
-                    "é a medida que os bancos centrais seguem para avaliar pressão estrutural."
+                    f"Variação homóloga em {mes_pt(ult_esp)}. 🍽️ componentes da alimentação · "
+                    "📊 agregados de enquadramento, que não são alimentação."
                 )
                 st.download_button(
-                    "⬇️ Descarregar agregados (CSV com fonte)",
-                    csv_com_fonte(pd.DataFrame(linhas_a),
-                                  "Agregados especiais do indice de precos", dados,
+                    "⬇️ Descarregar (CSV com fonte)",
+                    csv_com_fonte(pd.DataFrame(linhas_a).drop(columns=[""]),
+                                  "Decomposicao da inflacao alimentar", dados,
                                   extra=[("Mes de referencia", ult_esp)]),
-                    f"despesa_alimentar_agregados_{date.today()}.csv", "text/csv")
+                    f"despesa_alimentar_decomposicao_{date.today()}.csv", "text/csv")
 
     serie = dados["indice_pt"][["time", "valor"]].rename(
         columns={"time": "Período", "valor": f"Índice ({base})"})
@@ -1381,146 +1573,6 @@ sobre o consumo total de *todas* elas. Não existe versão «por agregado» nas 
                 "Fonte: Contas Nacionais (`nama_10_co3_p3`), rácio CP011/CP00. Publicação anual."
             )
 
-            # ---- esforço do agregado escolhido ----
-            st.divider()
-            st.markdown(f"#### Quanto pesa no orçamento — {composicao}")
-
-            rendimentos = dados.get("rendimento") or {}
-            sm_pt = (dados.get("salario") or {}).get("PT")
-            sme_pt = (dados.get("salario_medio") or {}).get("PT")
-            tem_rend = any(rendimentos.get(k, {}).get("PT") for k in ("MEI_E", "MED_E"))
-
-            if not tem_rend and not sm_pt and not sme_pt:
-                st.info(
-                    "Os indicadores de rendimento não estão disponíveis nesta sessão. "
-                    "Consulte o registo de ligações no separador Metodologia."
-                )
-            else:
-                ca_, cb_ = st.columns([1, 2])
-                with ca_:
-                    trabalhadores = st.number_input(
-                        "Adultos com rendimento", min_value=1, max_value=int(adultos),
-                        value=int(adultos), step=1,
-                        help=("Quantos dos adultos do agregado auferem rendimento. "
-                              "As crianças não entram nesta contagem."),
-                    )
-                with cb_:
-                    st.markdown(
-                        f"<div style='padding-top:26px;font-size:12.5px;color:#4a4a48'>"
-                        f"Agregado de <strong>{pessoas} pessoa{'s' if pessoas > 1 else ''}</strong>"
-                        + (f", dos quais {criancas} com menos de 14 anos, que não "
-                           f"{'auferem' if criancas > 1 else 'aufere'} rendimento" if criancas else "")
-                        + f". <strong>{trabalhadores}</strong> "
-                        + ("auferem" if trabalhadores > 1 else "aufere")
-                        + " rendimento. Despesa alimentar mensal: "
-                        + f"<strong>{euro(valor_cabaz)}</strong>.</div>",
-                        unsafe_allow_html=True)
-
-                # --- construir as referências disponíveis ---
-                refs = []
-                indic_r = None
-                if tem_rend:
-                    disponiveis = [k for k in ("MEI_E", "MED_E")
-                                   if rendimentos.get(k, {}).get("PT")]
-                    indic_r = "MEI_E" if "MEI_E" in disponiveis else disponiveis[0]
-                    r = rendimentos[indic_r]["PT"]
-                    ue_ocde = unidades_equivalentes(adultos, criancas, "ocde_modificada")
-                    refs.append({
-                        "ref": "Rendimento das famílias (EU-SILC)",
-                        "detalhe": (f"{'Médio' if indic_r == 'MEI_E' else 'Mediano'} equivalente "
-                                    f"{r['ano']} × {('%.2f' % ue_ocde).replace('.', ',')} unidades"),
-                        "mensal": r["valor"] * ue_ocde / 12,
-                        "natureza": "líquido",
-                    })
-                if sme_pt:
-                    refs.append({
-                        "ref": f"{trabalhadores} × salário médio",
-                        "detalhe": f"Trabalhador médio, líquido, {sme_pt['ano']}",
-                        "mensal": sme_pt["valor"] * trabalhadores / 12,
-                        "natureza": "líquido",
-                    })
-                if sm_pt:
-                    refs.append({
-                        "ref": f"{trabalhadores} × salário mínimo",
-                        "detalhe": f"Valor legal bruto, {sm_pt['periodo']}",
-                        "mensal": sm_pt["valor"] * trabalhadores,
-                        "natureza": "bruto",
-                    })
-
-                for r in refs:
-                    r["esforco"] = valor_cabaz / r["mensal"] * 100 if r["mensal"] else None
-
-                tab_r = pd.DataFrame([{
-                    "Referência": r["ref"],
-                    "Rendimento mensal": euro(r["mensal"]),
-                    "Esforço alimentar": (f"{r['esforco']:.1f} %".replace(".", ",")
-                                          if r["esforco"] is not None else "—"),
-                    "Natureza": r["natureza"],
-                    "Detalhe": r["detalhe"],
-                } for r in refs])
-                st.dataframe(tab_r, use_container_width=True, hide_index=True)
-
-                figR = go.Figure(go.Bar(
-                    y=[r["ref"] for r in refs],
-                    x=[r["esforco"] for r in refs], orientation="h",
-                    marker_color=[VERDE if r["natureza"] == "líquido" else DOURADO
-                                  for r in refs],
-                    text=[f"{r['esforco']:.1f} %".replace(".", ",") for r in refs],
-                    textposition="outside",
-                    hovertemplate="%{y}: %{x:.1f} % do rendimento<extra></extra>"))
-                figR.update_layout(height=max(200, 60 * len(refs)),
-                                   margin=dict(t=20, b=40, l=10, r=70),
-                                   xaxis_title="Fatia do rendimento absorvida pela alimentação (%)",
-                                   plot_bgcolor="#fff", showlegend=False)
-                figR.update_xaxes(gridcolor="#eef1f4")
-                st.plotly_chart(figR, use_container_width=True)
-
-                st.caption(
-                    "**Verde:** rendimento líquido — depois de impostos e contribuições. "
-                    "**Dourado:** salário mínimo, que é um valor **bruto legal** e por isso "
-                    "sobrestima o rendimento efetivamente disponível. Os dois não são "
-                    "diretamente comparáveis entre si."
-                )
-
-                with st.expander("⚠️ O que estes cálculos assumem — leitura obrigatória"):
-                    st.markdown(f"""
-**1 · As crianças não auferem rendimento.** O número de salários multiplica-se pelos
-**adultos com rendimento** indicados acima, nunca pelo total de pessoas. Um casal com dois
-filhos e dois salários continua a ter dois salários — mas quatro pessoas a alimentar, e é
-essa assimetria que faz o esforço subir.
-
-**2 · Bruto e líquido não se misturam.** O salário mínimo é um valor legal **bruto**: não
-desconta contribuições nem imposto, nem inclui prestações familiares. O rendimento do EU-SILC
-e o salário médio são **líquidos**. Comparar diretamente os dois esforços sobrestima o
-rendimento disponível de quem aufere o mínimo.
-
-**3 · O agregado está num valor central da distribuição.** Agregados abaixo dele têm esforço
-**superior** ao apresentado — e é justamente aí que a pressão alimentar mais se faz sentir.
-Uma medida por escalão de rendimento exigiria o IDEF/INE ou microdados do EU-SILC.
-
-**4 · Numerador e denominador usam escalas diferentes.** A despesa alimentar é ajustada pela
-escala que escolheu na barra lateral (**{ESCALAS[escala_chave]["nome"].split(" (")[0]}**); o
-rendimento do EU-SILC tem de usar a **OCDE modificada**, que é a que esse inquérito aplica.
-A consequência é mensurável:
-
-| Escala usada na despesa | 1 adulto | Casal | Casal + 2 |
-|---|---|---|---|
-| OCDE modificada (igual à do rendimento) | 25,9 % | 25,9 % | 25,9 % |
-| OCDE original | 22,3 % | 25,2 % | 28,6 % |
-| Per capita | 18,4 % | 24,5 % | 35,0 % |
-
-*(valores ilustrativos, com dados de referência)*
-
-Se as duas escalas coincidirem, **o esforço é constante** seja qual for a composição — ambos
-os lados escalam de forma idêntica. A subida com o número de pessoas resulta, portanto, da
-**diferença entre as escalas**. Isso não invalida a leitura, porque a alimentação tem
-economias de escala genuinamente mais fracas do que o consumo total; mas a **magnitude**
-depende da escala escolhida.
-
-**Como usar:** leia a **direção** como robusta e o **valor exato** como condicional. Teste
-sempre a sensibilidade mudando a escala na barra lateral.
-                    """)
-
             with st.expander("Descarregar dados do esforço"):
                 tab_e = df_e[["pais", "quota", "ano"]].copy()
                 tab_e.columns = ["País", "Fatia do consumo em alimentação (%)", "Ano"]
@@ -1791,7 +1843,7 @@ pressão sobre quem aufere menos.
 | Fonte | Conjunto | O que é | Natureza | Frequência |
 |---|---|---|---|---|
 | Rendimento das famílias | [`ilc_di03`](https://ec.europa.eu/eurostat/databrowser/view/ilc_di03/default/table) | Rendimento monetário do agregado, todas as fontes | **Líquido** | Anual |
-| Salário médio | [`earn_nt_net`](https://ec.europa.eu/eurostat/databrowser/view/earn_nt_net/default/table) | Remuneração do trabalhador médio | **Líquido** | Anual |
+| Salário médio | [`nama_10_a10`](https://ec.europa.eu/eurostat/databrowser/view/nama_10_a10/default/table) ÷ [`nama_10_a10_e`](https://ec.europa.eu/eurostat/databrowser/view/nama_10_a10_e/default/table) | Massa salarial ÷ trabalhadores por conta de outrem | **Bruto** | Anual |
 | Salário mínimo | [`earn_mw_cur`](https://ec.europa.eu/eurostat/databrowser/view/earn_mw_cur/default/table) | Valor legal mensal | **Bruto** | Semestral (janeiro e julho) |
 
 **Rendimento das famílias.** Vem do EU-SILC e é o mais completo: inclui salários, pensões,
@@ -1803,9 +1855,14 @@ pelas suas unidades equivalentes.
 Estão disponíveis a **média** e a **mediana**. A aplicação usa a média por defeito, porque a
 despesa alimentar também é uma média — combinar média com mediana inflacionaria o rácio.
 
-**Salário médio.** Remuneração líquida anual do trabalhador médio: já deduzidos o imposto sobre
-o rendimento e as contribuições do trabalhador, e somadas as prestações familiares. É por isso
-comparável com o rendimento do EU-SILC.
+**Salário médio.** Calculado a partir das Contas Nacionais: massa salarial (remunerações e
+salários) dividida pelo número de trabalhadores por conta de outrem. É uma remuneração **bruta**
+— antes de imposto e contribuições do trabalhador.
+
+Duas vantagens sobre as séries de remunerações líquidas: os códigos são estáveis, e fica na
+**mesma base estatística** da despesa alimentar usada como âncora — o que evita mais uma mistura
+de universos. Sendo bruto, é comparável com o salário mínimo, mas **não** com o rendimento
+líquido do EU-SILC.
 
 **Salário mínimo.** É o **valor legal bruto**, tal como fixado por diploma. Não desconta a
 contribuição do trabalhador para a Segurança Social nem o imposto retido, nem inclui prestações
@@ -1815,8 +1872,16 @@ apresentado — logo, o esforço alimentar real é **superior** ao que este rác
 É por essa razão que a aplicação assinala as duas naturezas com cores distintas e adverte que
 não são diretamente comparáveis entre si.
 
-**As crianças não auferem rendimento.** O multiplicador de salários é sempre o número de
-**adultos com rendimento**, nunca o total de pessoas do agregado.
+**Quem come e quem aufere não são o mesmo conjunto.** O multiplicador de salários é o número de
+pessoas que **efetivamente auferem rendimento**, nunca o total do agregado. E há um caso em que
+a diferença é decisiva: **os jovens entre os 14 e os 18 anos**.
+
+Para a escala de equivalência, uma pessoa de 15 ou 17 anos conta como adulta — come como
+adulta, e é isso que a escala mede. Mas não aufere rendimento. Um agregado de dois pais e dois
+adolescentes tem **quatro pessoas com peso alimentar de adulto e dois rendimentos**.
+
+É a composição em que o esforço alimentar é mais elevado, e precisamente a que os indicadores
+médios menos revelam. A aplicação assinala-a quando ocorre.
         """)
 
     with st.expander("🔄 Como a aplicação se mantém atualizada"):
@@ -1884,7 +1949,7 @@ diretamente o conjunto no Data Browser do Eurostat.
 | N.º de agregados | [`lfst_hhnhtych`](https://ec.europa.eu/eurostat/databrowser/view/lfst_hhnhtych/default/table) | Total de agregados familiares (milhares) | Anual |
 | Nível de preços comparado | [`prc_ppp_ind_1`](https://ec.europa.eu/eurostat/databrowser/view/prc_ppp_ind_1/default/table) | Quão caros são os alimentos (UE-27 = 100) | Anual |
 | Rendimento das famílias | [`ilc_di03`](https://ec.europa.eu/eurostat/databrowser/view/ilc_di03/default/table) | Rendimento líquido equivalente, médio e mediano | Anual |
-| Salário médio | [`earn_nt_net`](https://ec.europa.eu/eurostat/databrowser/view/earn_nt_net/default/table) | Remuneração líquida do trabalhador médio | Anual |
+| Salário médio | [`nama_10_a10`](https://ec.europa.eu/eurostat/databrowser/view/nama_10_a10/default/table) ÷ `nama_10_a10_e` | Remuneração média **bruta** dos trabalhadores por conta de outrem | Anual |
 | Salário mínimo | [`earn_mw_cur`](https://ec.europa.eu/eurostat/databrowser/view/earn_mw_cur/default/table) | Valor legal mensal, **bruto** | Semestral |
 
 **Parâmetros que não são dados oficiais**
@@ -1970,6 +2035,12 @@ Isto é distinto das definições demográficas do INE, que variam consoante o c
 estatísticas demográficas «jovens» são frequentemente os 0-14 anos; na proteção de menores, a
 menoridade vai até aos 18. São conceitos com finalidades diferentes, e não se misturam com os
 limiares das escalas de equivalência.
+
+**Consequência prática que importa reter.** Entre os 14 e os 18 anos, uma pessoa conta como
+adulta para efeitos de peso alimentar — e com razão, porque come como adulta — mas não aufere
+rendimento. Por isso a aplicação separa as duas contagens: **pessoas com 14 ou mais anos**
+determina a despesa; **quantas auferem rendimento** determina o denominador do esforço. Não são
+o mesmo número, e confundi-los subestima a pressão sobre as famílias com adolescentes.
         """)
 
     with st.expander("⚠️ Limitações a declarar em qualquer uso"):
@@ -1979,9 +2050,13 @@ limiares das escalas de equivalência.
 2. **Não há quantidades físicas.** A ferramenta mede despesa e variação de preço, não quilos
    nem litros. Para raciocinar em quantidades seria necessário o IDEF/INE ou dados de transação.
 3. **A âncora parte de uma média nacional.** Não distingue escalão de rendimento nem região.
-4. **As escalas de equivalência são aproximações.** Construídas para o consumo total; o
-   agregado médio é modelado como composto por adultos, porque a dimensão média é publicada sem
-   decomposição etária. Daí a apresentação em intervalo.
+4. **As escalas de equivalência são aproximações — e há um viés quantificável.** Construídas
+   para o consumo total; além disso, o agregado médio nacional é modelado como composto **apenas
+   por adultos**, porque a dimensão média é publicada sem decomposição etária. Como o agregado
+   médio real inclui menores, que pesam menos na escala, o denominador fica **sobrestimado em
+   cerca de 4 a 5 %** — e todos os valores por agregado saem **subestimados na mesma proporção**.
+   O viés é sistemático e na mesma direção para todas as composições, pelo que não afeta as
+   comparações entre elas.
 5. **Desfasamento das Contas Nacionais.** A âncora assenta num ano com cerca de dois anos de
    desfasamento, atualizado por índice de preços.
 6. **A correspondência COICOP → taxa de IVA é aproximada.** O Código do IVA classifica por

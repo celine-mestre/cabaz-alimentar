@@ -213,8 +213,8 @@ harmonizado de preços no consumidor (IHPC) compilado pelos institutos nacionais
 | Nível de preços comparado | `prc_ppp_ind_1` | Quão caros são os alimentos (UE-27 = 100) | Anual |
 | Rendimento equivalente | `ilc_di03` | Rendimento líquido médio e mediano (EU-SILC) | Anual |
 | Salário mínimo | `earn_mw_cur` | Valor bruto legal mensal | Semestral |
-| Salário médio líquido | `earn_nt_net` | Remuneração líquida do trabalhador médio | Anual |
-| Agregados especiais do índice | `prc_hicp_manr` | Total, alimentos transformados e não transformados, energia, subjacente | Mensal |
+| Salário médio | `nama_10_a10` ÷ `nama_10_a10_e` | Remuneração média bruta dos trabalhadores por conta de outrem | Anual |
+| Decomposição da inflação | `prc_hicp_manr` | Alimentos transformados e não transformados; total e subjacente como enquadramento | Mensal |
 
 **Códigos obtidos por tentativa.** Três destes conjuntos usam nomenclaturas que não coincidem
 com a COICOP do índice de preços, e cujos códigos exatos não foi possível verificar à distância:
@@ -416,12 +416,32 @@ aplicação deriva de um agregado nacional dividido pelo número de agregados �
 **média**. Combiná-la com um rendimento mediano misturaria duas medidas de tendência central
 diferentes e inflacionaria o rácio. A mediana continua disponível, com aviso.
 
+### Quem come e quem aufere não são o mesmo conjunto
+
+A escala de equivalência atribui peso de adulto a **todas as pessoas com 14 ou mais anos** — e
+com razão, porque a partir dessa idade come-se como adulto. Mas o rendimento é outra coisa: um
+jovem de 15 ou 17 anos conta na despesa e não conta na receita.
+
+Por isso a aplicação separa duas contagens:
+
+| Campo | Determina |
+|---|---|
+| **Pessoas com 14+ anos** | A despesa alimentar, via escala de equivalência |
+| **Quantas auferem rendimento** | O denominador do esforço |
+
+Um agregado de dois pais e dois adolescentes tem **quatro pessoas com peso alimentar de adulto e
+dois rendimentos**. É a composição em que o esforço alimentar é mais elevado, e precisamente a
+que os indicadores médios menos revelam — a aplicação assinala-a quando ocorre.
+
+O valor por defeito de quem aufere rendimento é **dois no máximo**, não o total de pessoas com
+14+ anos: assumir que todos os adolescentes auferem seria irrealista e subestimaria o esforço.
+
 ### As três fontes de rendimento — e a distinção bruto/líquido
 
 | Fonte | Conjunto | O que é | Natureza |
 |---|---|---|---|
 | Rendimento das famílias | `ilc_di03` | Rendimento do agregado, todas as fontes, deduzidos impostos e contribuições | **Líquido** |
-| Salário médio | `earn_nt_net` | Remuneração do trabalhador médio, após imposto e contribuições, com prestações familiares | **Líquido** |
+| Salário médio | `nama_10_a10` ÷ `nama_10_a10_e` | Massa salarial das Contas Nacionais dividida pelos trabalhadores por conta de outrem | **Bruto** |
 | Salário mínimo | `earn_mw_cur` | Valor legal mensal, tal como fixado por diploma | **Bruto** |
 
 **A distinção não é um detalhe.** O salário mínimo não desconta a contribuição do trabalhador
@@ -463,6 +483,61 @@ que o consumo total —, mas a magnitude depende da escala. Leia a direção com
 exato como condicional. Há um teste automático que fixa esta propriedade.
 
 ---
+
+## Auditoria de 27 de julho de 2026
+
+O modelo foi submetido a auditoria — verificação numérica das fórmulas, coerência económica e
+robustez do código. Foram encontrados **três problemas**, todos corrigidos ou declarados.
+
+### 1 · Incompatibilidade de bases no indicador de esforço · **grave**
+
+O numerador (despesa alimentar) vem das **Contas Nacionais**; o denominador (rendimento) vem do
+**EU-SILC**. São universos distintos: as Contas Nacionais incluem rendas imputadas, consumo de
+instituições sem fins lucrativos e consumo no território, incluindo o de não residentes; o
+EU-SILC mede rendimento monetário líquido dos residentes.
+
+O consumo por agregado das Contas Nacionais é estruturalmente **cerca de 1,8 vezes** o
+rendimento do EU-SILC — um rácio que implicaria taxa de poupança fortemente negativa. Combinar
+as duas bases **sobrestima o esforço**.
+
+*Sinal de deteção:* se o esforço exceder o coeficiente de Engel para o mesmo agregado, é este o
+motivo — o esforço sobre o rendimento deveria ser inferior ao peso no consumo, porque as
+famílias poupam.
+
+**Estado:** declarado na aplicação com aviso destacado; o esforço passa a ser apresentado como
+**limite superior**, e não como estimativa. A correção exigiria despesa e rendimento da mesma
+fonte, o que só o IDEF/INE permite.
+
+### 2 · Afirmação incorreta sobre a receita de IVA · **corrigido**
+
+A aplicação afirmava que a receita cessante é a mesma qualquer que seja a repercussão. **Só é
+verdade numa isenção total.** Numa redução parcial, uma repercussão menor mantém o preço final
+mais alto e portanto a base tributável maior: o Estado recupera parte do que o operador retém.
+
+Verificação numérica (106 €, de 23 % para 6 %): a receita cessante varia entre −13,82 € e
+−14,65 € consoante a repercussão vá de 0 % a 100 % — cerca de 6 % de amplitude.
+
+**Estado:** texto corrigido e propriedade fixada em teste automático.
+
+### 3 · Viés na modelação do agregado médio · **quantificado**
+
+O agregado médio nacional é modelado como composto apenas por adultos, porque a dimensão média é
+publicada sem decomposição etária. Como o agregado médio real inclui menores, que pesam menos na
+escala, o denominador fica sobrestimado em **4 a 5 %** e todos os valores por agregado saem
+subestimados na mesma proporção.
+
+**Estado:** quantificado e declarado. O viés é **proporcional** — igual para todas as
+composições —, pelo que não contamina as comparações entre elas. Propriedade fixada em teste.
+
+### Verificações que passaram
+
+| Teste | Resultado |
+|---|---|
+| Aditividade da decomposição (500 combinações aleatórias) | 0 falhas |
+| Ordem de grandeza da âncora face ao IDEF | Plausível |
+| Robustez numérica (valores nulos, taxas iguais, repercussão 0 e 1) | Sem exceções |
+| Agregados extremos (10 adultos, 10 menores) | Sem valores não finitos |
+| Divisão por zero em ponderadores, rendimento e escalas | Protegida |
 
 ## Limitações a declarar
 

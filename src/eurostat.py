@@ -378,39 +378,53 @@ def rendimento(geos, desde_ano: int, indicador: str = "MEI_E") -> tuple[pd.DataF
 
 # Casos-tipo do conjunto de remunerações líquidas anuais. O primeiro que
 # responda serve de referência para o «trabalhador médio».
-SALARIO_MEDIO_CASOS = [
-    "A1_100",        # pessoa só, sem filhos, 100 % do trabalhador médio
-    "P1_NCH_AW100",
-    "SINGLE_NCH_AW100",
-]
-
-
 def salario_medio(geos, desde_ano: int) -> tuple[pd.DataFrame, str]:
     """
-    Remuneração líquida anual do trabalhador médio, em euros.
+    Remuneração média anual dos trabalhadores por conta de outrem, **bruta**.
 
-    Vem já **líquida**: deduzidos o imposto sobre o rendimento e as contribuições
-    do trabalhador, e somadas as prestações familiares. É, por isso, comparável
-    com o rendimento do EU-SILC — e não com o salário mínimo, que é bruto.
+    Calculada a partir das Contas Nacionais: massa salarial (D11, remunerações
+    e salários) dividida pelo número de trabalhadores por conta de outrem. Tem
+    duas vantagens sobre as séries de remunerações líquidas: os códigos são
+    estáveis, e fica na **mesma base estatística** da despesa alimentar usada
+    como âncora — o que evita a mistura de universos apontada em auditoria.
 
-    A codificação dos casos-tipo variou entre versões do conjunto, pelo que se
-    tentam vários e se usa o primeiro que responda.
+    É bruta: antes de imposto e contribuições do trabalhador. Comparável com o
+    salário mínimo, que também é bruto; **não** comparável com o rendimento
+    líquido do EU-SILC.
     """
     geos = list(geos)
     ultimo = None
-    for caso in SALARIO_MEDIO_CASOS:
-        for chave in [f"A.EUR.{caso}", f"A.NAC.{caso}", f"A.{caso}.EUR"]:
-            try:
-                df, via = obter(
-                    "earn_nt_net",
-                    f"{chave}.{'+'.join(geos)}",
-                    {"freq": "A", "currency": "EUR", "estruct": caso,
-                     "geo": geos, "sinceTimePeriod": str(desde_ano)},
-                    inicio=str(desde_ano),
-                )
-                if not df.empty:
-                    return df, f"{via} (caso {caso})"
-            except Exception as exc:                         # noqa: BLE001
-                ultimo = exc
+    for chave_massa, chave_emprego in [
+        ("A.CP_MEUR.TOTAL.D11", "A.THS_PER.TOTAL.SAL_DC"),
+        ("A.CP_MEUR.TOTAL.D1", "A.THS_PER.TOTAL.SAL_DC"),
+        ("A.CP_MEUR.TOTAL.D11", "A.THS_PER.TOTAL.SAL"),
+    ]:
+        try:
+            massa, via_m = obter(
+                "nama_10_a10", f"{chave_massa}.{'+'.join(geos)}",
+                {"freq": "A", "unit": "CP_MEUR", "nace_r2": "TOTAL",
+                 "na_item": chave_massa.split(".")[-1], "geo": geos,
+                 "sinceTimePeriod": str(desde_ano)}, inicio=str(desde_ano))
+            emprego, _ = obter(
+                "nama_10_a10_e", f"{chave_emprego}.{'+'.join(geos)}",
+                {"freq": "A", "unit": "THS_PER", "nace_r2": "TOTAL",
+                 "na_item": chave_emprego.split(".")[-1], "geo": geos,
+                 "sinceTimePeriod": str(desde_ano)}, inicio=str(desde_ano))
+            if massa.empty or emprego.empty:
                 continue
-    raise ErroEurostat(f"earn_nt_net — nenhum caso respondeu ({ultimo})")
+
+            juncao = massa.merge(emprego, on=["geo", "time"], suffixes=("_m", "_e"))
+            juncao = juncao[juncao["valor_e"] > 0]
+            if juncao.empty:
+                continue
+            # M€ -> €  ÷  (milhares de pessoas -> pessoas)
+            juncao["valor"] = juncao["valor_m"] * 1e6 / (juncao["valor_e"] * 1e3)
+            resultado = juncao[["geo", "time", "valor"]].copy()
+            resultado["unit"] = "EUR"
+            resultado["coicop"] = ""
+            return resultado, f"{via_m} (D11/emprego)"
+        except Exception as exc:                             # noqa: BLE001
+            ultimo = exc
+            continue
+    raise ErroEurostat(
+        f"nama_10_a10 — não foi possível calcular a remuneração média ({ultimo})")

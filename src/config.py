@@ -45,14 +45,25 @@ COICOP_ALIMENTAR = "CP011"
 # do que é inflação estrutural, e situar a alimentação no conjunto dos preços.
 # --------------------------------------------------------------------------
 AGREGADOS = [
-    {"cod": "CP00",           "nome": "Todos os produtos",        "cor": "#171715", "larg": 2.6},
-    {"cod": "FOOD",           "nome": "Alimentação e bebidas",    "cor": "#0E7433", "larg": 2.6},
-    {"cod": "FOOD_NP",        "nome": "Alimentos não transformados", "cor": "#D02117", "larg": 2.0},
-    {"cod": "FOOD_P",         "nome": "Alimentos transformados",  "cor": "#BE9C54", "larg": 2.0},
-    {"cod": "NRG",            "nome": "Energia",                  "cor": "#7a5ea8", "larg": 1.8},
+    # --- a alimentação por dentro: são componentes do objeto do estudo ---
+    {"cod": "FOOD_NP", "nome": "Alimentos não transformados", "cor": "#D02117", "larg": 2.4,
+     "grupo": "alimentacao", "porque": "Frescos. Reagem a clima e sazonalidade — é aqui que "
+                                       "os choques de oferta aparecem primeiro."},
+    {"cod": "FOOD_P", "nome": "Alimentos transformados", "cor": "#BE9C54", "larg": 2.4,
+     "grupo": "alimentacao", "porque": "Pão, laticínios, conservas. Refletem custos de "
+                                       "produção e distribuição, não o tempo que fez."},
+    {"cod": "FOOD", "nome": "Alimentação e bebidas (total)", "cor": "#0E7433", "larg": 2.8,
+     "grupo": "alimentacao", "porque": "O agregado que o debate público chama «alimentação»."},
+    # --- enquadramento: não são alimentação, servem de referência ---
+    {"cod": "CP00", "nome": "Todos os produtos", "cor": "#171715", "larg": 2.2,
+     "grupo": "enquadramento", "porque": "A inflação geral. Responde a «como pode a inflação "
+                                         "ser baixa e o cabaz subir?»"},
     {"cod": "TOT_X_NRG_FOOD", "nome": "Subjacente (sem energia nem alimentos)",
-     "cor": "#2B5683", "larg": 1.8},
+     "cor": "#2B5683", "larg": 1.8, "grupo": "enquadramento",
+     "porque": "A medida que os bancos centrais seguem. Distingue pressão estrutural "
+               "de choque temporário."},
 ]
+
 COD_AGREGADOS = [a["cod"] for a in AGREGADOS]
 
 # --------------------------------------------------------------------------

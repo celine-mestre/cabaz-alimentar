@@ -144,3 +144,51 @@ def test_esforco_constante_quando_escalas_coincidem():
         rend = rendimento_eq * unidades_equivalentes(adultos, criancas, "ocde_modificada") / 12
         crescentes.append(desp / rend * 100)
     assert crescentes == sorted(crescentes)
+
+
+# ------------------------------------------------ achados da auditoria
+def test_receita_constante_apenas_na_isencao_total():
+    """
+    A receita cessante é independente da repercussão **apenas** quando a taxa do
+    cenário é zero. Numa redução parcial, uma repercussão menor mantém o preço
+    final mais alto e, portanto, a base tributável maior: o Estado recupera parte
+    do que o operador retém. Auditoria de 27.07.2026.
+    """
+    import pandas as pd
+    from src.calculos import resumo_iva, simular_iva
+
+    def um(valor, iva):
+        return pd.DataFrame([{"codigo": "X", "classe": "T", "emoji": "", "cor": "#000",
+                              "valor": valor, "iva_defeito": iva}])
+
+    # isenção total: receita cessante idêntica para qualquer repercussão
+    receitas = [resumo_iva(simular_iva(um(106.0, 23), {"X": 23}, {"X": 0}, r),
+                           106.0, 12, 1)["receita_cabaz"] for r in (0.0, 0.5, 1.0)]
+    assert max(receitas) - min(receitas) < 1e-9
+
+    # redução parcial: a receita cessante depende da repercussão
+    parciais = [resumo_iva(simular_iva(um(106.0, 23), {"X": 23}, {"X": 6}, r),
+                           106.0, 12, 1)["receita_cabaz"] for r in (0.0, 0.5, 1.0)]
+    assert max(parciais) - min(parciais) > 0.5
+    # e é decrescente: menos repercussão -> menos receita perdida
+    assert parciais == sorted(parciais, reverse=True)
+
+
+def test_vies_do_agregado_medio_e_sistematico():
+    """
+    Modelar o agregado médio como composto só por adultos sobrestima o
+    denominador e subestima todos os valores por agregado. O viés tem de ser
+    proporcional — igual para todas as composições — para não contaminar as
+    comparações entre elas. Auditoria de 27.07.2026.
+    """
+    from src.calculos import despesa_do_agregado
+
+    media = 422.54
+    dim_modelo, dim_corrigida = 2.4, 2.28   # ajuste por presença de menores
+    racios = []
+    for adultos, criancas in [(1, 0), (2, 0), (2, 2), (3, 1), (2, 4)]:
+        a = despesa_do_agregado(media, dim_modelo, adultos, criancas, "ocde_original")
+        b = despesa_do_agregado(media, dim_corrigida, adultos, criancas, "ocde_original")
+        racios.append(b / a)
+    assert max(racios) - min(racios) < 1e-9      # viés proporcional
+    assert racios[0] > 1.0                        # e no sentido de subestimação
