@@ -904,7 +904,7 @@ with aba1:
                     "ref": f"{trabalhadores} × salário médio",
                     "detalhe": f"Remuneração média anual, bruta, {sme_pt['ano']}",
                     "mensal": sme_pt["valor"] * trabalhadores / 12,
-                    "natureza": "líquido",
+                    "natureza": "bruto",
                 })
             if sm_pt:
                 refs.append({
@@ -978,16 +978,20 @@ majorante.
     filhos e dois salários continua a ter dois salários — mas quatro pessoas a alimentar, e é
     essa assimetria que faz o esforço subir.
 
-    **2 · Bruto e líquido não se misturam.** O salário mínimo é um valor legal **bruto**: não
-    desconta contribuições nem imposto, nem inclui prestações familiares. O rendimento do EU-SILC
-    e o salário médio são **líquidos**. Comparar diretamente os dois esforços sobrestima o
-    rendimento disponível de quem aufere o mínimo.
+    **2 · Bruto e líquido não se misturam.** Só o **rendimento do EU-SILC** é líquido — já
+    descontados impostos e contribuições, e somadas as prestações. O **salário médio** e o
+    **salário mínimo** são **brutos**: é o que consta do contrato ou do diploma, antes de
+    qualquer desconto. Como o rendimento efetivamente disponível é inferior aos valores brutos,
+    o esforço real sobre eles é **superior** ao que aqui aparece.
 
     **3 · O agregado está num valor central da distribuição.** Agregados abaixo dele têm esforço
     **superior** ao apresentado — e é justamente aí que a pressão alimentar mais se faz sentir.
     Uma medida por escalão de rendimento exigiria o IDEF/INE ou microdados do EU-SILC.
 
-    **4 · Numerador e denominador usam escalas diferentes.** A despesa alimentar é ajustada pela
+    **4 · As três escalas cruzam-se na dimensão média — e é isso que explica o resultado
+    contraintuitivo.** Ver o gráfico logo abaixo deste bloco.
+
+    **5 · Numerador e denominador usam escalas diferentes.** A despesa alimentar é ajustada pela
     escala que escolheu na barra lateral (**{ESCALAS[escala_chave]["nome"].split(" (")[0]}**); o
     rendimento do EU-SILC tem de usar a **OCDE modificada**, que é a que esse inquérito aplica.
     A consequência é mensurável:
@@ -1008,6 +1012,65 @@ majorante.
 
     **Como usar:** leia a **direção** como robusta e o **valor exato** como condicional. Teste
     sempre a sensibilidade mudando a escala na barra lateral.
+                """)
+
+            # ---- gráfico do cruzamento das escalas ----
+            with st.expander("📐 Porque é que as escalas dão resultados diferentes — e cruzam"):
+                st.markdown(f"""
+Cada escala responde à mesma pergunta de forma diferente: **quanto custa cada pessoa a mais?**
+
+| Escala | 1.ª pessoa | Cada pessoa a mais |
+|---|---|---|
+| Per capita | 1,0 | **1,0** — sem partilha |
+| OCDE original | 1,0 | **0,7** — desconto moderado |
+| OCDE modificada | 1,0 | **0,5** — desconto forte |
+
+O que confunde: **todas partem do mesmo sítio** — a despesa do agregado médio português, com
+**{('%.2f' % dim_efetiva).replace('.', ',')} pessoas**. A escala não calcula do zero: distribui
+a partir dessa referência. Por isso **as três cruzam-se exatamente nessa dimensão**.
+                """)
+
+                tam = [1, 1.5, 2, 2.5, 3, 4, 5, 6]
+                figS = go.Figure()
+                cores_s = {"per_capita": "#7a5ea8", "ocde_original": VERDE,
+                           "ocde_modificada": DOURADO}
+                for chave in ESCALAS:
+                    e_ = ESCALAS[chave]
+                    eq_med = e_["primeiro"] + e_["adulto"] * (max(dim_efetiva, 1.0) - 1)
+                    por_unidade = valor_medio_agregado / eq_med if eq_med else 0
+                    ys = [por_unidade * (e_["primeiro"] + e_["adulto"] * (n - 1)) for n in tam]
+                    figS.add_trace(go.Scatter(
+                        x=tam, y=ys, name=e_["nome"].split(" (")[0],
+                        line=dict(color=cores_s[chave], width=2.6),
+                        hovertemplate="%{x} pessoas: %{y:.0f} €<extra>"
+                                      + e_["nome"].split(" (")[0] + "</extra>"))
+                figS.add_vline(
+                    x=dim_efetiva, line_width=2, line_dash="dash", line_color="#64748b",
+                    annotation_text=f"agregado médio: {('%.2f' % dim_efetiva).replace('.', ',')}",
+                    annotation_position="top")
+                figS.update_layout(height=340, margin=dict(t=46, b=40, l=10, r=10),
+                                   xaxis_title="Pessoas no agregado (todas com 14+ anos)",
+                                   yaxis_title="Despesa alimentar mensal (€)",
+                                   legend=dict(orientation="h", y=1.22, x=0),
+                                   hovermode="x unified", plot_bgcolor="#fff")
+                figS.update_xaxes(gridcolor="#eef1f4")
+                figS.update_yaxes(gridcolor="#eef1f4")
+                st.plotly_chart(figS, use_container_width=True)
+
+                st.success("""
+**A leitura do gráfico — é isto que responde à dúvida.**
+
+**À esquerda do cruzamento**, agregados **menores** que a média: a OCDE modificada dá valores
+**mais altos**. Se cada pessoa a mais custa pouco (0,5), então ter menos gente do que a média
+**poupa pouco** — fica-se perto do valor médio. Na per capita, em que cada pessoa vale a
+totalidade, ter menos gente **desconta muito mais**.
+
+**À direita**, agregados **maiores**: inverte-se. Se cada pessoa a mais custa pouco, acrescentar
+gente **aumenta pouco** — e a OCDE modificada passa a dar os valores mais baixos.
+
+**Em resumo:** desconto forte **comprime** as diferenças, aproximando todos os agregados da
+média; desconto fraco **amplifica-as**. O cruzamento está sempre na dimensão média, porque é aí
+que não há nada a descontar nem a acrescentar.
                 """)
 
 
@@ -1567,7 +1630,7 @@ with aba4:
     | | Numerador | Denominador |
     |---|---|---|
     | **Coeficiente de Engel** (aqui) | O que as famílias gastam em **comida** | O que as famílias gastam em **tudo** |
-    | **Esforço alimentar** (bloco seguinte) | O que o agregado gasta em **comida** | O que o agregado **recebe** |
+    | **Esforço alimentar** (separador «Despesa e composição») | O que o agregado gasta em **comida** | O que o agregado **recebe** |
 
     Por isso os dois números são diferentes e não se substituem. Este mede **como se reparte o
     orçamento de consumo**; o seguinte mede **quanto do rendimento é absorvido pela comida**.
