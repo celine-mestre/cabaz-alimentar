@@ -877,27 +877,11 @@ with aba1:
     em que o esforço alimentar é mais elevado, e a que os indicadores médios menos revelam.
                     """)
 
-            st.error("""
-    **Leia isto antes de usar estes números.** O esforço apresentado é um **limite superior**, não
-    uma estimativa. A razão é de fundo, e foi detetada em auditoria:
-
-    O **numerador** — a despesa alimentar — vem das **Contas Nacionais**. O **denominador** — o
-    rendimento — vem do **EU-SILC**. São universos estatísticos diferentes: as Contas Nacionais
-    incluem rendas imputadas, consumo de instituições sem fins lucrativos e consumo no território,
-    incluindo o de não residentes; o EU-SILC mede rendimento monetário líquido dos residentes.
-
-    O consumo por agregado das Contas Nacionais é estruturalmente **cerca de 1,8 vezes** o
-    rendimento do EU-SILC — um rácio que implicaria taxa de poupança fortemente negativa, o que não
-    corresponde à realidade. **Combinar as duas bases sobrestima o esforço.**
-
-    Sinal prático: se o esforço aqui exceder o coeficiente de Engel da secção anterior, é este o
-    motivo. Para o mesmo agregado, o esforço sobre o *rendimento* deveria ser **inferior** ao peso
-    no *consumo*, porque as famílias poupam.
-
-    **Como usar:** leia as **diferenças entre composições** e a **direção** como informativas; leia
-    o **nível** como majorante. Um rácio internamente coerente exigiria despesa e rendimento da
-    mesma fonte — o que só o IDEF/INE permite.
-            """)
+            st.caption(
+                "⚠️ Estes valores são **limites superiores** — despesa e rendimento vêm de "
+                "fontes com bases estatísticas diferentes. Explicação em «O que estes números "
+                "assumem», no fim desta secção."
+            )
 
             # --- construir as referências disponíveis ---
             refs = []
@@ -958,6 +942,13 @@ with aba1:
             figR.update_xaxes(gridcolor="#eef1f4")
             st.plotly_chart(figR, use_container_width=True)
 
+            st.info(
+                "**Sobre o cenário do salário mínimo.** Não é o agregado típico — é o **limiar "
+                "inferior** da distribuição. Mas não é caso raro: cerca de um quarto dos "
+                "trabalhadores portugueses aufere a remuneração mínima, e é precisamente aí "
+                "que a pressão alimentar mais aperta. Serve para dimensionar o pior caso "
+                "plausível, não para caracterizar a generalidade das famílias."
+            )
             st.caption(
                 "**Verde:** rendimento **líquido** — depois de impostos e contribuições. "
                 "**Dourado:** valores **brutos** — salário médio e salário mínimo, antes de "
@@ -966,7 +957,21 @@ with aba1:
                 "diretamente comparáveis entre si."
             )
 
-            with st.expander("⚠️ O que estes cálculos assumem — leitura obrigatória"):
+            with st.expander("⚠️ O que estes números assumem — leitura obrigatória"):
+                st.error("""
+**São limites superiores, não estimativas.** O **numerador** — a despesa alimentar — vem das
+**Contas Nacionais**; o **denominador** — o rendimento — vem do **EU-SILC**. São universos
+estatísticos diferentes: as Contas Nacionais incluem rendas imputadas, consumo de instituições
+sem fins lucrativos e consumo no território, incluindo o de não residentes; o EU-SILC mede
+rendimento monetário líquido dos residentes.
+
+O consumo por agregado das Contas Nacionais é estruturalmente **cerca de 1,8 vezes** o
+rendimento do EU-SILC — rácio que implicaria taxa de poupança fortemente negativa.
+**Combinar as duas bases sobrestima o esforço.**
+
+Leia as **diferenças entre composições** e a **direção** como informativas; o **nível** como
+majorante.
+                """)
                 st.markdown(f"""
     **1 · As crianças não auferem rendimento.** O número de salários multiplica-se pelos
     **adultos com rendimento** indicados acima, nunca pelo total de pessoas. Um casal com dois
