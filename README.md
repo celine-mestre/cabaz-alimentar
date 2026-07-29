@@ -1,10 +1,10 @@
-# Cabaz alimentar — ferramenta de análise
+# Despesa alimentar — ferramenta de análise
 
-Aplicação de apoio à decisão sobre o cabaz alimentar em Portugal, desenvolvida
+Aplicação de apoio à decisão sobre a despesa alimentar das famílias em Portugal, desenvolvida
 pela **Unidade de Pesquisa e Estatísticas (UPE)** da Direção de Serviços de
 Suporte à Decisão, Secretaria-Geral do Governo.
 
-Obtém dados oficiais em direto do Eurostat e permite decompor o valor do cabaz
+Obtém dados oficiais em direto do Eurostat e permite decompor a despesa alimentar
 por tipo de produto, acompanhar a série histórica, simular alterações do IVA e
 comparar Portugal com os restantes Estados-Membros.
 
@@ -31,7 +31,7 @@ comparar Portugal com os restantes Estados-Membros.
 
 A aplicação organiza-se em cinco separadores.
 
-**1 · Cabaz e composição.** O valor de referência é, por defeito, **oficial**:
+**1 · Despesa e composição.** O valor de referência é, por defeito, **oficial**:
 a despesa alimentar mensal por agregado, derivada das Contas Nacionais e
 atualizada para o mês mais recente pelo índice oficial de preços. A aplicação
 reparte-o pelas nove classes de produtos alimentares, usando os ponderadores do
@@ -79,7 +79,7 @@ publicada automaticamente.
 ## Estrutura do repositório
 
 ```
-cabaz-alimentar/
+despesa-alimentar/
 ├── app.py                  # aplicação Streamlit (interface e separadores)
 ├── requirements.txt        # dependências
 ├── README.md               # este ficheiro
@@ -90,7 +90,7 @@ cabaz-alimentar/
 │   ├── __init__.py
 │   ├── config.py           # classes COICOP, países, cores, formatação
 │   ├── eurostat.py         # acesso aos dados (duas vias independentes)
-│   └── calculos.py         # decomposição do cabaz e simulação de IVA
+│   └── calculos.py         # decomposição da despesa e simulação de IVA
 └── tests/
     └── test_calculos.py    # 13 testes dos cálculos analíticos
 ```
@@ -107,8 +107,8 @@ Requer **Python 3.10 ou superior**.
 
 ```bash
 # 1. Obter o código
-git clone https://github.com/<utilizador>/cabaz-alimentar.git
-cd cabaz-alimentar
+git clone https://github.com/<utilizador>/despesa-alimentar.git
+cd despesa-alimentar
 
 # 2. Criar e ativar um ambiente virtual
 python -m venv .venv
@@ -137,7 +137,7 @@ python -m pytest tests/ -v
 ### Pela interface web (mais simples)
 
 1. Em [github.com](https://github.com), clique em **New repository**.
-2. Nome: `cabaz-alimentar`. Visibilidade: **Public** — necessário para o plano
+2. Nome: `despesa-alimentar`. Visibilidade: **Public** — necessário para o plano
    gratuito do Streamlit Community Cloud. Não adicione README, `.gitignore` nem
    licença (já existem).
 3. **Create repository**.
@@ -154,12 +154,12 @@ python -m pytest tests/ -v
 ### Por linha de comandos
 
 ```bash
-cd cabaz-alimentar
+cd despesa-alimentar
 git init
 git add .
-git commit -m "Ferramenta do cabaz alimentar — versao inicial"
+git commit -m "Ferramenta da despesa alimentar — versao inicial"
 git branch -M main
-git remote add origin https://github.com/<utilizador>/cabaz-alimentar.git
+git remote add origin https://github.com/<utilizador>/despesa-alimentar.git
 git push -u origin main
 ```
 
@@ -174,10 +174,10 @@ git push -u origin main
 
    | Campo | Valor |
    |---|---|
-   | Repository | `<utilizador>/cabaz-alimentar` |
+   | Repository | `<utilizador>/despesa-alimentar` |
    | Branch | `main` |
    | Main file path | `app.py` |
-   | App URL | `cabaz-alimentar` (ou outro nome disponível) |
+   | App URL | `sggov-despesa-alimentar` (ou outro nome disponível) |
 
 4. **Deploy**. A primeira instalação demora 2 a 4 minutos.
 
@@ -246,7 +246,7 @@ resultados deixam de ser reproduzíveis a partir de fontes oficiais.
 
 ### A âncora em euros
 
-O índice de preços dá **variações, nunca níveis**: não permite dizer «o cabaz
+O índice de preços dá **variações, nunca níveis**: não permite dizer «isto
 custa X euros». É preciso uma âncora em euros.
 
 A aplicação usa uma âncora **oficial**: a despesa final das famílias em produtos
@@ -296,9 +296,9 @@ intervalo** entre a escala mais restritiva e a mais generosa, em vez de um valor
 O separador inclui um comparador de composições típicas (pessoa só, casal,
 monoparental com filhos, casal com filhos), com o intervalo de cada uma.
 
-### Sobre séries privadas de cabaz
+### Sobre séries privadas de cabazes
 
-Séries de cabaz publicadas por associações de consumidores são úteis para
+Séries de cabazes publicadas por entidades privadas são úteis para
 compreender o debate público, mas **não são usadas como fonte desta aplicação**,
 por três razões:
 
@@ -342,7 +342,7 @@ efetivamente utilizada.
 
 ## Metodologia
 
-### Decomposição do cabaz
+### Decomposição da despesa alimentar
 
 O valor total é repartido pelas nove classes na proporção dos ponderadores
 oficiais. A cada classe aplica-se a respetiva variação homóloga.
@@ -539,6 +539,56 @@ composições —, pelo que não contamina as comparações entre elas. Propried
 | Agregados extremos (10 adultos, 10 menores) | Sem valores não finitos |
 | Divisão por zero em ponderadores, rendimento e escalas | Protegida |
 
+## «Despesa alimentar» e não «cabaz»
+
+Os dois termos designam objetos diferentes. Esta aplicação usa apenas o primeiro para o que
+mede; «cabaz» aparece só quando se fala dos cabazes **de outros**.
+
+| | **Cabaz** | **Despesa alimentar** |
+|---|---|---|
+| O que é | Lista de produtos com quantidades definidas | Quanto uma família gasta em comida |
+| Como se obtém | Somando os preços dos artigos da lista | Repartindo despesa efetiva por grupos |
+| Unidade natural | Um ato de compra | Um mês |
+| Quantidades | Fixas e conhecidas | Não existem — só euros |
+
+A aplicação **não tem cabaz nenhum**: não conhece quantidades, não observa preços de produtos,
+não tem lista de artigos.
+
+### Coerência do nome do repositório
+
+A aplicação chama-se **despesa alimentar**. Se o repositório e o endereço público ainda
+disserem «cabaz», há incoerência — e vale a pena resolvê-la, porque o nome do endereço é a
+primeira coisa que quem recebe a ligação vê.
+
+**Renomear o repositório**
+
+1. GitHub → repositório → **Settings** → separador **General**
+2. Campo **Repository name** → escrever `despesa-alimentar` → **Rename**
+
+O GitHub cria automaticamente um encaminhamento do nome antigo para o novo, pelo que ligações
+já enviadas continuam a funcionar. Quem tiver o repositório clonado deve atualizar a origem:
+
+```bash
+git remote set-url origin https://github.com/<utilizador>/despesa-alimentar.git
+```
+
+**Reapontar o Streamlit**
+
+O Streamlit guarda a referência ao repositório e **não acompanha a mudança de nome**. Depois de
+renomear:
+
+1. `share.streamlit.io` → ⋮ na aplicação → **Delete**
+2. **Create app** → repositório `despesa-alimentar`, branch `main`, ficheiro `app.py`
+3. Em **App URL**, definir o subdomínio — por exemplo `sggov-despesa-alimentar`
+
+Demora cerca de três minutos e a aplicação volta ao ar. **O endereço antigo deixa de
+funcionar**, pelo que convém avisar quem já o tenha.
+
+**Se preferir não mexer**, a alternativa coerente é assumir o nome antigo apenas como
+identificador técnico do repositório, e garantir que **nada no que é visível ao utilizador**
+— título, separadores, textos, ficheiros exportados — usa a palavra «cabaz» para designar
+este indicador. É o que a aplicação já faz.
+
 ## Limitações a declarar
 
 Qualquer utilização destes resultados em suporte à decisão ou em comunicação
@@ -567,7 +617,7 @@ deve fazer-se acompanhar destas ressalvas:
    conter produtos a taxas diferentes.
 7. **A repercussão é uma hipótese.** Qualquer resultado do simulador é condicional
    a esse parâmetro e deve ser apresentado como intervalo, nunca como valor único.
-8. **Preço de prateleira não é preço pago.** Nem o cabaz nem o IHPC captam
+8. **Preço de prateleira não é preço pago.** Nem estas séries nem o IHPC captam
    integralmente descontos de cartão e de talão. Só dados de transação
    (e-fatura, *scanner data*) o permitiriam.
 9. **A extrapolação agregada é ilustrativa.** A multiplicação pelo número de

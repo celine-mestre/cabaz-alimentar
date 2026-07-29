@@ -1,5 +1,5 @@
 """
-Cabaz alimentar — ferramenta de análise
+Despesa alimentar — ferramenta de análise
 UPE · DSSD · Secretaria-Geral do Governo
 
 Executar localmente:   streamlit run app.py
@@ -33,7 +33,7 @@ except Exception:                                          # noqa: BLE001
     LOGO = ""
 
 st.set_page_config(
-    page_title="Cabaz alimentar — UPE/SGGov",
+    page_title="Despesa alimentar — UPE/SGGov",
     page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -114,6 +114,7 @@ def carregar_dados(anos_historico: int = 6):
     JANELA = 8
 
     registo = []
+    eurostat.ENDERECOS.clear()
 
     pesos_df, via1 = eurostat.ponderadores(CODIGOS)
     registo.append(("Ponderadores", via1, len(pesos_df)))
@@ -354,6 +355,7 @@ def carregar_dados(anos_historico: int = 6):
         "bench": bench,
         "bench_todos": bench_todos,
         "registo": registo,
+        "enderecos": list(eurostat.ENDERECOS),
         "momento": datetime.now(),
     }
 
@@ -524,7 +526,7 @@ def grafico_reparticao(sim: pd.DataFrame) -> go.Figure:
     fig.update_layout(
         barmode="stack", height=330, margin=dict(t=30, b=30, l=10, r=10),
         legend=dict(orientation="h", y=1.14, x=0),
-        xaxis_title="Euros por cabaz", plot_bgcolor="#fff",
+        xaxis_title="Euros por mês", plot_bgcolor="#fff",
     )
     fig.update_xaxes(gridcolor="#eef1f4")
     return fig
@@ -624,7 +626,7 @@ with st.sidebar:
         help="Como se ajusta a despesa ao número de pessoas. Ver separador Metodologia.",
     )
 
-    valor_cabaz = despesa_do_agregado(
+    despesa_mensal = despesa_do_agregado(
         media_agregado, dim_efetiva, adultos, criancas, escala_chave)
     faixa = intervalo_agregado(media_agregado, dim_efetiva, adultos, criancas)
 
@@ -642,7 +644,7 @@ with st.sidebar:
     vezes_ano = 12
 
     st.divider()
-    st.metric(f"Despesa mensal — {composicao}", euro(valor_cabaz))
+    st.metric(f"Despesa mensal — {composicao}", euro(despesa_mensal))
     st.caption(f"{pessoas} pessoa{'s' if pessoas > 1 else ''} · "
                f"intervalo entre escalas de {euro(faixa['minimo'])} a {euro(faixa['maximo'])}")
 
@@ -719,8 +721,8 @@ st.success(
 )
 
 # --- decomposição base, usada por vários separadores ---
-df_decomp = decompor(valor_cabaz, dados["pesos"], dados["variacoes_classe"])
-resumo = resumo_decomposicao(df_decomp, valor_cabaz)
+df_decomp = decompor(despesa_mensal, dados["pesos"], dados["variacoes_classe"])
+resumo = resumo_decomposicao(df_decomp, despesa_mensal)
 
 from contextlib import contextmanager
 
@@ -748,17 +750,17 @@ def painel(nome: str):
 
 
 aba1, aba2, aba3, aba4, aba5 = st.tabs([
-    "🛒 Cabaz e composição", "📈 Histórico", "🧾 Simulador de IVA",
+    "🛒 Despesa e composição", "📈 Histórico", "🧾 Simulador de IVA",
     "🇪🇺 Comparação UE-27", "📚 Metodologia e fontes",
 ])
 
 # ==========================================================================
-# ABA 1 — Cabaz e composição
+# ABA 1 — Despesa e composição
 # ==========================================================================
 with aba1:
     with painel("Despesa e composição"):
         colunas = st.columns(5)
-        colunas[0].metric(f"Despesa mensal — {composicao}", euro(valor_cabaz), help=origem)
+        colunas[0].metric(f"Despesa mensal — {composicao}", euro(despesa_mensal), help=origem)
         if resumo["contributo_total"] is not None:
             colunas[1].metric("Agravamento nos últimos 12 meses", euro(resumo["contributo_total"]),
                               percentagem(resumo["variacao_implicita"]))
@@ -768,7 +770,7 @@ with aba1:
                 colunas[3].metric(f"{maior['emoji']} Maior contributo",
                                   euro(maior["contributo"]),
                                   percentagem(maior["variacao"]))
-        colunas[4].metric("Equivalente anual", euro(valor_cabaz * vezes_ano))
+        colunas[4].metric("Equivalente anual", euro(despesa_mensal * vezes_ano))
 
         dim_txt = ('%.1f' % dim_efetiva).replace('.', ',')
         r1, r2, r3 = st.columns([1, 1, 2])
@@ -865,7 +867,7 @@ with aba1:
                        if dependentes else "")
                     + (f" · <strong>{criancas}</strong> com menos de 14 anos"
                        if criancas else "")
-                    + f"<br>Despesa alimentar mensal: <strong>{euro(valor_cabaz)}</strong>."
+                    + f"<br>Despesa alimentar mensal: <strong>{euro(despesa_mensal)}</strong>."
                     "</div>",
                     unsafe_allow_html=True)
 
@@ -915,7 +917,7 @@ with aba1:
                 })
 
             for r in refs:
-                r["esforco"] = valor_cabaz / r["mensal"] * 100 if r["mensal"] else None
+                r["esforco"] = despesa_mensal / r["mensal"] * 100 if r["mensal"] else None
 
             tab_r = pd.DataFrame([{
                 "Referência": r["ref"],
@@ -1370,11 +1372,11 @@ with aba3:
               Entre abril de 2023 e janeiro de 2024 vigorou em Portugal a isenção de IVA
               sobre uma lista taxativa de bens alimentares essenciais. A medição do seu
               efeito <strong>divergiu consoante quem media</strong> — a ASAE apurou uma
-              redução acumulada superior a 10 % no cabaz monitorizado, a DECO apurou cerca
-              de metade disso no período inicial. A diferença não estava nos factos, estava
-              na metodologia: cabazes diferentes, períodos diferentes, critérios de recolha
-              diferentes. É exatamente o tipo de divergência que o cursor de repercussão
-              permite explorar aqui.
+              medições feitas por entidades diferentes chegaram a resultados substancialmente
+              distintos para a mesma medida — numa delas, mais do dobro da outra. A diferença
+              não estava nos factos, estava na metodologia: listas de produtos diferentes,
+              períodos diferentes, critérios de recolha diferentes. É exatamente o tipo de
+              divergência que o cursor de repercussão permite explorar aqui.
             </div>
             """, unsafe_allow_html=True)
 
@@ -1464,17 +1466,17 @@ with aba3:
         taxas_cenario = dict(zip(df_decomp["codigo"], editado["Taxa do cenário (%)"]))
 
         sim = simular_iva(df_decomp, taxas_atuais, taxas_cenario, repercussao)
-        res = resumo_iva(sim, valor_cabaz, vezes_ano, agregados)
+        res = resumo_iva(sim, despesa_mensal, vezes_ano, agregados)
 
         c = st.columns(5)
-        c[0].metric("Novo valor do cabaz", euro(res["novo_valor"]),
+        c[0].metric("Nova despesa mensal", euro(res["novo_valor"]),
                     euro(res["efetivo"]) if abs(res["efetivo"]) > 0.005 else None)
-        c[1].metric("Poupança por cabaz", euro(res["poupanca_cabaz"]),
+        c[1].metric("Poupança por mês", euro(res["poupanca_mes"]),
                     help=f"Efeito com repercussão integral: {euro(-res['mecanico'])}")
         c[2].metric("Poupança anual por agregado", euro(res["poupanca_ano"]))
         c[3].metric("Capturado na margem", euro(res["margem"]),
                     f"{(1 - repercussao) * 100:.0f} % do efeito")
-        c[4].metric("Receita de IVA por cabaz", euro(res["receita_cabaz"]),
+        c[4].metric("Receita de IVA por mês", euro(res["receita_mes"]),
                     help=f"{euro(res['iva_antes'])} → {euro(res['iva_depois'])}")
 
         fig_rep = grafico_reparticao(sim)
@@ -1498,7 +1500,7 @@ with aba3:
         st.markdown("""
         <div class="nota perigo">
           <div class="tt">Isto não é uma estimativa de custo orçamental</div>
-          É aritmética de ordens de grandeza. O cabaz de referência
+          É aritmética de ordens de grandeza. A despesa de referência
           <strong>não representa a despesa alimentar total</strong> de um agregado
           (exclui produtos, canais e consumo fora de casa), nem os agregados são
           homogéneos. Uma estimativa de receita cessante exige a base tributável real
@@ -2088,6 +2090,86 @@ with aba5:
                 "no consumo total. Por isso o cálculo normaliza pela soma dos nove, e não pelos 1 000 ‰."
             )
 
+        with st.expander("🔗 Ver os dados em bruto — endereços exatos desta sessão"):
+            st.markdown("""
+Cada número da aplicação vem de um pedido concreto ao Eurostat. Os endereços abaixo são os que
+foram efetivamente usados **nesta sessão** — abrem no navegador e descarregam o ficheiro em
+bruto, exatamente os mesmos dados que a aplicação leu.
+
+Servem para **verificar qualquer valor** sem depender da aplicação, e para reproduzir o cálculo
+em Excel ou noutra ferramenta.
+            """)
+            _end = dados.get("enderecos") or []
+            if not _end:
+                st.info("Sem endereços registados nesta sessão.")
+            else:
+                _rot = {
+                    "prc_hicp_inw": "Ponderadores por grupo — coluna «Ponderador ‰»",
+                    "prc_hicp_manr": "Variação homóloga — coluna «Variação %»",
+                    "prc_hicp_midx": "Índice de preços — atualiza a âncora ao mês corrente",
+                    "nama_10_co3_p3": "Despesa alimentar e consumo total — âncora em euros",
+                    "ilc_lvph01": "Dimensão média do agregado",
+                    "lfst_hhnhtych": "Número de agregados familiares",
+                    "ilc_di03": "Rendimento equivalente das famílias",
+                    "earn_mw_cur": "Salário mínimo",
+                    "nama_10_a10": "Massa salarial — numerador do salário médio",
+                    "nama_10_a10_e": "Trabalhadores por conta de outrem — denominador",
+                    "prc_ppp_ind_1": "Nível de preços comparado",
+                }
+                for _ds, _url in _end:
+                    st.markdown(
+                        f"**{_rot.get(_ds, _ds)}**  \n"
+                        f"`{_ds}` · [abrir os dados em bruto]({_url})")
+                st.caption(
+                    "Formato SDMX-CSV: uma linha por observação, com as dimensões em colunas "
+                    "(`coicop`, `geo`, `TIME_PERIOD`) e o valor em `OBS_VALUE`."
+                )
+
+        with st.expander("🧮 Como se obtém cada coluna da tabela detalhada"):
+            st.markdown("""
+A tabela do primeiro separador tem cinco colunas calculadas. Cada uma vem de um sítio concreto.
+
+**Código** — a classe COICOP, de `CP0111` a `CP0119`. Não é calculado: é a nomenclatura
+oficial. `CP0111` é pão e cereais, `CP0112` carne, e assim por diante.
+
+**Ponderador (‰)** — vem tal e qual de `prc_hicp_inw`, sem transformação. Diz quantos de cada
+mil euros do consumo total das famílias vão para aquele grupo. Se pão e cereais tiver 28,1 ‰,
+significa 2,81 % do consumo total — e, dentro da alimentação, 28,1 dividido pela soma dos nove.
+
+**Quota** — o ponderador do grupo dividido pela soma dos nove ponderadores. É a fração da
+despesa **alimentar** que cabe àquele grupo. A soma das nove quotas dá 100 %.
+
+**Valor (€)** — a despesa alimentar mensal do agregado, multiplicada pela quota do grupo.
+            """)
+            st.latex(r"V_i = \text{despesa total} \times \frac{w_i}{\sum_j w_j}")
+            st.markdown("""
+**Variação (%)** — vem tal e qual de `prc_hicp_manr`, sem transformação. É a variação homóloga
+oficial daquele grupo: de quanto subiram os preços face ao mesmo mês do ano anterior.
+
+**Contributo (€)** — quantos euros do agravamento dos últimos doze meses se devem àquele grupo.
+Se o grupo vale hoje *Vᵢ* e os preços subiram *gᵢ* por cento, há um ano valia *Vᵢ/(1+gᵢ)*:
+            """)
+            st.latex(r"\text{contributo}_i = V_i - \frac{V_i}{1+g_i} = V_i \cdot \frac{g_i}{1+g_i}")
+            st.success("""
+**Exemplo com números.** Suponha despesa alimentar mensal de **400 €**, e que o grupo «carne»
+tem ponderador 42,3 ‰ numa soma de 195,0 ‰:
+
+1. **Quota** = 42,3 ÷ 195,0 = **21,7 %**
+2. **Valor** = 400 € × 0,217 = **86,77 €**
+3. **Variação** = 4,8 % (lida diretamente do Eurostat)
+4. **Contributo** = 86,77 × 0,048 ÷ 1,048 = **3,97 €**
+
+Interpretação: dos euros a mais que a família gasta por mês face ao ano passado, **3,97 €**
+devem-se à carne. Somando os nove contributos obtém-se exatamente o agravamento total — é uma
+propriedade verificada por teste automático.
+            """)
+            st.warning("""
+**O que não é calculado a partir de preços.** Nenhuma coluna resulta de observar preços de
+produtos. Os ponderadores e as variações vêm prontos do Eurostat; o único cálculo é a
+repartição de um valor total por essas proporções. É por isso que a tabela é uma
+**reconstituição**, e não uma medição.
+            """)
+
         with st.expander("🔌 Registo das ligações desta sessão"):
             st.dataframe(pd.DataFrame(dados["registo"],
                                       columns=["Dados pedidos", "Via de acesso usada",
@@ -2108,6 +2190,23 @@ with aba5:
     apenas para diagnóstico.
             """)
 
+        with st.expander("📛 «Despesa alimentar» e não «cabaz» — porquê"):
+            st.markdown("""
+Os dois termos designam objetos diferentes, e a aplicação usa apenas o primeiro para o que
+mede. «Cabaz» aparece só quando se fala de cabazes **de terceiros** ou do «cabaz zero» de 2023.
+
+| | **Cabaz** | **Despesa alimentar** |
+|---|---|---|
+| O que é | Lista de produtos com quantidades definidas | Quanto uma família gasta em comida |
+| Como se obtém | Somando os preços dos artigos da lista | Repartindo despesa efetiva por grupos |
+| Unidade natural | Um ato de compra | Um mês |
+| Quantidades | Fixas e conhecidas | Não existem — só euros |
+
+Esta aplicação **não tem cabaz nenhum**: não conhece quantidades, não observa preços de
+produtos, não tem lista de artigos. Tem despesa em euros e variações de preço oficiais.
+Chamar-lhe cabaz seria prometer o que não entrega.
+
+            """)
         with st.expander("🏷️ De onde vem a classificação COICOP"):
             st.markdown("""
     A **COICOP** — *Classification of Individual Consumption According to Purpose* — é uma

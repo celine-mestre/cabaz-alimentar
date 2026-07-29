@@ -87,7 +87,7 @@ def test_receita_perdida_e_independente_da_repercussao():
     perdas = []
     for rho in (0.0, 0.4, 1.0):
         sim = simular_iva(_uma_classe(106.0, 6), {"CP0111": 6}, {"CP0111": 0}, rho)
-        perdas.append(resumo_iva(sim, 106.0, 52, 1)["receita_cabaz"])
+        perdas.append(resumo_iva(sim, 106.0, 52, 1)["receita_mes"])
     assert all(p == pytest.approx(-6.0) for p in perdas)
 
 
@@ -163,12 +163,12 @@ def test_receita_constante_apenas_na_isencao_total():
 
     # isenção total: receita cessante idêntica para qualquer repercussão
     receitas = [resumo_iva(simular_iva(um(106.0, 23), {"X": 23}, {"X": 0}, r),
-                           106.0, 12, 1)["receita_cabaz"] for r in (0.0, 0.5, 1.0)]
+                           106.0, 12, 1)["receita_mes"] for r in (0.0, 0.5, 1.0)]
     assert max(receitas) - min(receitas) < 1e-9
 
     # redução parcial: a receita cessante depende da repercussão
     parciais = [resumo_iva(simular_iva(um(106.0, 23), {"X": 23}, {"X": 6}, r),
-                           106.0, 12, 1)["receita_cabaz"] for r in (0.0, 0.5, 1.0)]
+                           106.0, 12, 1)["receita_mes"] for r in (0.0, 0.5, 1.0)]
     assert max(parciais) - min(parciais) > 0.5
     # e é decrescente: menos repercussão -> menos receita perdida
     assert parciais == sorted(parciais, reverse=True)

@@ -42,11 +42,18 @@ class ErroEurostat(RuntimeError):
 # --------------------------------------------------------------------------
 # Via 1 — SDMX 2.1 (chave no caminho)
 # --------------------------------------------------------------------------
+# Registo dos endereços efetivamente usados, para rastreabilidade. É lido pela
+# aplicação e apresentado no separador Metodologia.
+ENDERECOS: list[tuple[str, str]] = []
+
+
 def _via_sdmx(dataset: str, chave: str, inicio: str | None = None) -> pd.DataFrame:
     url = f"{SDMX}{dataset}/{chave}"
     params = {"format": "SDMX-CSV"}
     if inicio:
         params["startPeriod"] = inicio
+    _completo = url + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+    ENDERECOS.append((dataset, _completo))
 
     resp = requests.get(url, params=params, timeout=TEMPO_LIMITE, headers=CABECALHOS)
     resp.raise_for_status()

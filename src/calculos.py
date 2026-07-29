@@ -1,10 +1,10 @@
 """
-Cálculos analíticos: decomposição do cabaz e simulação de alterações do IVA.
+Cálculos analíticos: decomposição da despesa alimentar e simulação de alterações do IVA.
 
 Notas metodológicas
 -------------------
-**Decomposição.** Não existe fonte pública com o preço dos produtos individuais
-do cabaz DECO. O que se faz aqui é imputar o valor total pelas nove classes
+**Decomposição.** Não existe fonte pública com o preço dos produtos individuais.
+O que se faz aqui é imputar o valor total pelas nove classes
 COICOP, usando os ponderadores oficiais do IHPC, e aplicar a cada classe a sua
 variação oficial. É uma reconstituição defensável e replicável — não é a
 observação produto a produto.
@@ -27,13 +27,13 @@ from .config import CLASSES, POR_CODIGO
 
 
 # --------------------------------------------------------------------------
-# Decomposição do cabaz
+# Decomposição da despesa alimentar
 # --------------------------------------------------------------------------
-def decompor(valor_cabaz: float,
+def decompor(valor_total: float,
              pesos: dict[str, float],
              variacoes: dict[str, float]) -> pd.DataFrame:
     """
-    Reparte o valor do cabaz pelas classes e calcula o contributo de cada uma
+    Reparte a despesa alimentar pelas classes e calcula o contributo de cada uma
     para a variação homóloga.
 
     Devolve um DataFrame com uma linha por classe.
@@ -45,7 +45,7 @@ def decompor(valor_cabaz: float,
         cod = classe["cod"]
         peso = float(pesos.get(cod) or 0.0)
         quota = peso / total_pesos if total_pesos > 0 else 0.0
-        valor = valor_cabaz * quota
+        valor = valor_total * quota
 
         var = variacoes.get(cod)
         if var is not None and pd.notna(var) and (1 + var / 100) != 0:
@@ -69,13 +69,13 @@ def decompor(valor_cabaz: float,
     return pd.DataFrame(linhas)
 
 
-def resumo_decomposicao(df: pd.DataFrame, valor_cabaz: float) -> dict:
+def resumo_decomposicao(df: pd.DataFrame, valor_total: float) -> dict:
     """Indicadores agregados da decomposição."""
     contributos = df["contributo"].dropna()
     total_contributo = float(contributos.sum()) if not contributos.empty else None
 
     resultado = {
-        "valor": valor_cabaz,
+        "valor": valor_total,
         "contributo_total": total_contributo,
         "valor_ha_um_ano": None,
         "variacao_implicita": None,
@@ -83,7 +83,7 @@ def resumo_decomposicao(df: pd.DataFrame, valor_cabaz: float) -> dict:
     }
 
     if total_contributo is not None:
-        antes = valor_cabaz - total_contributo
+        antes = valor_total - total_contributo
         resultado["valor_ha_um_ano"] = antes
         if antes > 0:
             resultado["variacao_implicita"] = total_contributo / antes * 100
@@ -149,7 +149,7 @@ def simular_iva(df: pd.DataFrame,
     return pd.DataFrame(linhas)
 
 
-def resumo_iva(sim: pd.DataFrame, valor_cabaz: float,
+def resumo_iva(sim: pd.DataFrame, valor_total: float,
                vezes_ano: int, agregados: int) -> dict:
     """Agrega o resultado da simulação e extrapola ordens de grandeza."""
     mecanico = float(sim["mecanico"].sum())
@@ -158,22 +158,22 @@ def resumo_iva(sim: pd.DataFrame, valor_cabaz: float,
     iva_antes = float(sim["iva_antes"].sum())
     iva_depois = float(sim["iva_depois"].sum())
 
-    poupanca_cabaz = -efetivo          # positiva quando o cabaz fica mais barato
-    poupanca_ano = poupanca_cabaz * vezes_ano
-    receita_cabaz = iva_depois - iva_antes
+    poupanca_mes = -efetivo          # positiva quando a despesa desce
+    poupanca_ano = poupanca_mes * vezes_ano
+    receita_mes = iva_depois - iva_antes
 
     return {
-        "novo_valor": valor_cabaz + efetivo,
+        "novo_valor": valor_total + efetivo,
         "mecanico": mecanico,
         "efetivo": efetivo,
-        "poupanca_cabaz": poupanca_cabaz,
+        "poupanca_mes": poupanca_mes,
         "poupanca_ano": poupanca_ano,
         "margem": -margem,
         "iva_antes": iva_antes,
         "iva_depois": iva_depois,
-        "receita_cabaz": receita_cabaz,
+        "receita_mes": receita_mes,
         "poupanca_agregada_milhoes": poupanca_ano * agregados / 1e6,
-        "receita_agregada_milhoes": receita_cabaz * vezes_ano * agregados / 1e6,
+        "receita_agregada_milhoes": receita_mes * vezes_ano * agregados / 1e6,
     }
 
 
